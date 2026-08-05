@@ -1,0 +1,28 @@
+{
+  "__comments": {
+    "suffix_reoptimization": "是否启用首个异常点触发的后缀重优化方法。",
+    "suffix_reoptimization_log": "历史兼容字段；不再控制详细 experiment.log，方法明细统一写入 reconstructions.jsonl。",
+    "suffix_reopt_max_rounds": "每个样本最多尝试多少轮后缀重优化。",
+    "suffix_reopt_epoch": "每轮后缀重优化的优化步数。",
+    "suffix_reopt_lr": "后缀 embedding 优化阶段的学习率。",
+    "suffix_reopt_reg_weight": "后缀 embedding 与上一轮 optimized embedding 保持接近的正则项权重。",
+    "suffix_hidden_low_threshold": "异常信号之一：optimized embedding 经过 forward 后的 hidden similarity 过低。",
+    "suffix_hidden_drop_threshold": "异常信号之一：当前 hidden similarity 相比前一个位置至少下降该数值。",
+    "suffix_token_forward_low_threshold": "异常信号之一：当前重构 token 序列经过 forward 验证后的 hidden similarity 过低。",
+    "suffix_min_anomaly_reasons": "触发后缀重优化所需满足的最少异常信号数量。",
+    "suffix_min_hidden_delta": "当 accuracy 没有提升时，接受候选结果所需的最小后缀 hidden 均值提升。",
+    "suffix_accuracy_tolerance": "考虑非 accuracy 改善时允许的 accuracy 下降幅度；保持 0 表示不允许下降。"
+  },
+  "suffix_reoptimization": true,
+  "suffix_reoptimization_log": true,
+  "suffix_reopt_max_rounds": 2,
+  "suffix_reopt_epoch": 50,
+  "suffix_reopt_lr": 0.03,
+  "suffix_reopt_reg_weight": 0.02,
+  "suffix_hidden_low_threshold": 0.50,
+  "suffix_hidden_drop_threshold": 0.3,
+  "suffix_token_forward_low_threshold": 0.75,
+  "suffix_min_anomaly_reasons": 1,
+  "suffix_min_hidden_delta": 0.005,
+  "suffix_accuracy_tolerance": 0.0
+}

@@ -1,0 +1,68 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Python / Conda 虚拟环境
+.venv/
+venv/
+env/
+conda_env/
+
+# IDE 配置
+.vscode/
+.idea/
+
+# Windows / macOS 临时文件
+Thumbs.db
+.DS_Store
+
+# 密钥和本地环境变量
+.env
+*.key
+*.pem
+
+# 模型与检查点
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+checkpoints/
+models/
+.cache/
+
+# 实验生成内容
+results/
+outputs/
+wandb/
+
+# 临时日志
+*.tmp
+*.bak
+
+# 服务器、本地专用配置
+*.local.json
+.env.*
+!.env.example
+
+# 测试、代码检查和覆盖率
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+/test/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python 构建产物
+build/
+dist/
+*.egg-info/
+*.so
+
+# 思路
+/思路/

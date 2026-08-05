@@ -1,0 +1,44 @@
+{
+  "include_configs": [
+    "../suffix_optimization_methods/configs/advanced_methods.json"
+  ],
+  "datasets": [
+    {
+      "name": "airport",
+      "path": "skytrax-reviews-dataset/data/airport.csv",
+      "type": "github",
+      "len": 5
+    },
+    {
+      "name": "medical",
+      "path": "data/medical.json",
+      "type": "local",
+      "len": 5
+    }
+  ],
+  "dataset_path": "skytrax-reviews-dataset/data/airport.csv",
+  "dataset_type": "github",
+  "dataset_len": 5,
+  "base_model_name": "Qwen/Qwen2.5-1.5B",
+  "lr": 0.1,
+  "epoch": 1000,
+  "alpha": 0.001,
+  "clip": true,
+  "num_invert_layers": 24,
+  "init_method": "uniform",
+  "init_param": 0.1,
+  "optim_method": "cosine",
+  "invert_method": "cosine",
+  "filter_nonascii": true,
+  "perplexity": true,
+  "top_k_ppl": 10,
+  "top_k_cos": 10,
+  "suffix_version": "v1.2.1",
+  "cgmr_version": "v1.1",
+  "quantization": "none",
+  "device_map": "auto",
+  "offload_state_dict": true,
+  "log_dir": "results/invert_timestamp_runs",
+  "seed": 0,
+  "output_dir": "l24_airport_medical_v1_2_1_cgmr_v1_1"
+}

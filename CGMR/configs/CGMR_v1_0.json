@@ -1,0 +1,31 @@
+{
+  "__comments": {
+    "cgmr_v1_0": "是否启用 CGMR v1.0；实际版本由 candidate_reranking_methods.json 中的 selector 选择。",
+    "cgmr_v1_0_log": "历史兼容字段；不再控制详细 experiment.log，方法明细统一写入 reconstructions.jsonl。",
+    "cgmr_v1_0_layer_offsets": "相对目标层 L 的非负层偏移；0 必须存在。",
+    "cgmr_v1_0_layer_weights": "与 layer_offsets 对应的非负权重，运行时会对有效层重新归一化。",
+    "cgmr_v1_0_strong_margin_threshold": "层 L top-1/top-2 margin 的强触发阈值。",
+    "cgmr_v1_0_weak_margin_threshold": "层 L margin 的弱风险阈值。",
+    "cgmr_v1_0_low_score_threshold": "层 L top-1 绝对 cosine 的低分阈值。",
+    "cgmr_v1_0_weak_signals_required": "非强触发时所需弱风险信号数量。",
+    "cgmr_v1_0_min_enhanced_gain": "新 token 相对当前 token 的最小多层总分增益。",
+    "cgmr_v1_0_min_enhanced_margin": "多层 top-1/top-2 最小 margin。",
+    "cgmr_v1_0_max_layer_l_drop": "允许新 token 在目标层 L 上最多下降的原始 cosine。"
+  },
+  "cgmr_v1_0": true,
+  "cgmr_v1_0_log": true,
+  "cgmr_v1_0_layer_offsets": [0, 1, 2],
+  "cgmr_v1_0_layer_weights": [0.5, 0.3, 0.2],
+  "cgmr_v1_0_normalization": "zscore",
+  "cgmr_v1_0_consistency_weight": 0.0,
+  "cgmr_v1_0_strong_margin_threshold": 0.01,
+  "cgmr_v1_0_weak_margin_threshold": 0.02,
+  "cgmr_v1_0_low_score_threshold": 0.50,
+  "cgmr_v1_0_weak_signals_required": 2,
+  "cgmr_v1_0_max_candidates": 32,
+  "cgmr_v1_0_candidate_batch_size": 16,
+  "cgmr_v1_0_min_enhanced_gain": 0.05,
+  "cgmr_v1_0_min_enhanced_margin": 0.05,
+  "cgmr_v1_0_max_layer_l_drop": 0.02,
+  "cgmr_v1_0_max_repair_steps": 5
+}

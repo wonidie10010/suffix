@@ -1,0 +1,33 @@
+{
+  "__comments": {
+    "suffix_v1_2_3": "是否启用完整的 suffix v1.2.3 两阶段方法。由 suffix_version 显式选择。",
+    "suffix_v1_2_3_log": "历史兼容字段；sidecar 不写 experiment.log，方法明细统一写入 reconstructions.jsonl。",
+    "stage1": "第一阶段保持现有 relative-MSE 连续优化、embedding-MSE 检索和 hidden-relative-MSE 候选重排。",
+    "reoptimization": "第二阶段原样复用 suffix reoptimization v1.2.2 的参数与实现。"
+  },
+  "suffix_v1_2_3": false,
+  "suffix_v1_2_3_log": true,
+  "suffix_v1_2_3_max_rounds": 2,
+  "suffix_v1_2_3_epoch": 50,
+  "suffix_v1_2_3_lr": 0.03,
+  "suffix_v1_2_3_embedding_relative_mse_high_threshold": 1.0,
+  "suffix_v1_2_3_relative_mse_rise_threshold": 0.30,
+  "suffix_v1_2_3_token_relative_mse_high_threshold": 1.0,
+  "suffix_v1_2_3_min_anomaly_reasons": 1,
+  "suffix_v1_2_3_anomaly_detection_mode": "adaptive",
+  "suffix_v1_2_3_adaptive_z_threshold": 1.5,
+  "suffix_v1_2_3_adaptive_rise_z_threshold": 1.5,
+  "suffix_v1_2_3_adaptive_min_std": 0.000001,
+  "suffix_v1_2_3_adaptive_min_points": 4,
+  "suffix_v1_2_3_min_relative_mse_improvement": 0.01,
+  "suffix_v1_2_3_accuracy_tolerance": 0.0,
+  "suffix_v1_2_3_accept_mode": "oracle_accuracy",
+  "suffix_v1_2_3_hidden_weight_mode": "front_decay",
+  "suffix_v1_2_3_hidden_weight_decay": 0.90,
+  "suffix_v1_2_3_hidden_weight_floor": 0.20,
+  "suffix_v1_2_3_cosine_loss_weight": 0.1,
+  "suffix_v1_2_3_relative_mse_loss_weight": 0.9,
+  "suffix_v1_2_3_prox_weight": 0.005,
+  "suffix_v1_2_3_range_weight": 0.001,
+  "suffix_v1_2_3_gradient_trend_stats_enabled": true
+}

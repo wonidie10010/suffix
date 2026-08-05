@@ -1,0 +1,8 @@
+{
+  "cgmr_version": "v1.2",
+  "include_configs": [
+    "CGMR_v1_0.json",
+    "CGMR_v1_1.json",
+    "CGMR_v1_2.json"
+  ]
+}

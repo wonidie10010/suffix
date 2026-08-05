@@ -1,0 +1,8 @@
+{
+  "include_configs": [
+    "l24_airport_medical.json"
+  ],
+  "suffix_version": "v1.4.1",
+  "cgmr_version": "none",
+  "output_dir": "l24_airport_medical_suffix_v1_4_1_no_cgmr"
+}

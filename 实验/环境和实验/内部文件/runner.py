@@ -16,14 +16,71 @@ import traceback
 MODEL_ID = "Qwen/Qwen2.5-1.5B"
 EXPERIMENT_CONFIG = (
     "experiment_configs/"
-    "l24_airport_medical_suffix_v1_2_3_no_cgmr.json"
+    "l24_airport_medical_suffix_v2_0_no_cgmr.json"
 )
-METHOD_DIRECTORY = "suffix_reoptimization_v1.2.3"
+METHOD_DIRECTORY = "suffix_reoptimization_v2.0"
 REQUIRED_ARTIFACTS = (
     "resolved_config.json",
     "experiment.log",
     "reconstructions.jsonl",
 )
+
+
+def prepare_smoke_experiment(project_dir, runtime_dir):
+    project_dir = Path(project_dir).resolve()
+    smoke_root = Path(runtime_dir).resolve() / "smoke-test"
+    run_root = smoke_root / "runs"
+    copy_root = smoke_root / "smoke-copied-results"
+    smoke_root.mkdir(parents=True, exist_ok=True)
+    data_path = smoke_root / "smoke_data.json"
+    config_path = smoke_root / "suffix_v2_0_smoke.json"
+    official_config = (
+        project_dir
+        / "experiment_configs"
+        / "l24_airport_medical_suffix_v2_0_no_cgmr.json"
+    )
+    if not official_config.is_file():
+        raise FileNotFoundError(
+            "official suffix v2.0 config is missing: {}".format(
+                official_config
+            )
+        )
+    data_path.write_text(
+        json.dumps(["Test."], ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    config = {
+        "include_configs": [str(official_config)],
+        "datasets": [{
+            "name": "suffix_v2_0_smoke",
+            "path": str(data_path),
+            "type": "local",
+            "len": 1,
+        }],
+        "dataset_path": str(data_path),
+        "dataset_type": "local",
+        "dataset_len": 1,
+        "epoch": 1,
+        "suffix_v2_0_phase1_epoch": 1,
+        "suffix_v2_0_phase2_epoch": 1,
+        "suffix_v2_0_normal_embedding_top_k": 1,
+        "suffix_v2_0_expanded_embedding_top_k": 1,
+        "suffix_v2_0_ppl_top_k": 1,
+        "suffix_v2_0_classifier_top_k": 1,
+        "device_map": "single_gpu",
+        "log_dir": str(run_root),
+        "output_dir": "suffix_v2_0_one_click_smoke",
+    }
+    config_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "config": config_path,
+        "data": data_path,
+        "run_root": run_root,
+        "copy_root": copy_root,
+    }
 
 EXIT_MODEL_FAILURE = 20
 EXIT_EXPERIMENT_FAILURE = 30
@@ -187,14 +244,20 @@ def read_progress_state(progress_file):
     return None
 
 
-def run_experiment(project_dir, runtime_dir, log_file, progress, env):
+def run_experiment(
+        project_dir,
+        runtime_dir,
+        log_file,
+        progress,
+        env,
+        interval=2.0,
+        experiment_config=EXPERIMENT_CONFIG,
+        run_root=None):
     project_dir = Path(project_dir).resolve()
-    progress_file = Path(runtime_dir) / "experiment-progress.json"
-    if progress_file.exists():
-        progress_file.unlink()
-
     method_root = (
-        project_dir
+        Path(run_root).resolve() / METHOD_DIRECTORY
+        if run_root is not None
+        else project_dir
         / "results"
         / "invert_timestamp_runs"
         / METHOD_DIRECTORY
@@ -208,12 +271,12 @@ def run_experiment(project_dir, runtime_dir, log_file, progress, env):
         sys.executable,
         str(project_dir / "invert.py"),
         "--config",
-        EXPERIMENT_CONFIG,
-        "--progress-file",
-        str(progress_file),
+        str(experiment_config),
     ]
     append_log(log_file, "starting experiment: {}".format(" ".join(command)))
     tracked_run_dir = None
+    current_percent = 50
+    progress.update(current_percent)
     with Path(log_file).open("ab", buffering=0) as log_handle:
         process = subprocess.Popen(
             command,
@@ -222,22 +285,13 @@ def run_experiment(project_dir, runtime_dir, log_file, progress, env):
             stdout=log_handle,
             stderr=subprocess.STDOUT,
         )
-        last_state = None
         while process.poll() is None:
-            state = read_progress_state(progress_file)
-            if state is not None and state != last_state:
-                last_state = state
-                if state.get("run_dir"):
-                    tracked_run_dir = Path(state["run_dir"]).resolve()
-                progress.update(experiment_percent(state))
-            time.sleep(0.2)
+            time.sleep(interval)
+            if current_percent < 98:
+                current_percent += 1
+                progress.update(current_percent)
         return_code = process.wait()
 
-    state = read_progress_state(progress_file)
-    if state is not None:
-        if state.get("run_dir"):
-            tracked_run_dir = Path(state["run_dir"]).resolve()
-        progress.update(experiment_percent(state))
     if return_code != 0:
         append_log(
             log_file,
@@ -274,17 +328,18 @@ def _is_relative_to(path, parent):
         return False
 
 
-def copy_and_verify_results(project_dir, result_root, run_dir):
+def copy_and_verify_results(
+        project_dir, result_root, run_dir, source_root=None):
     if run_dir is None:
         raise RuntimeError("experiment run directory was not reported")
     project_dir = Path(project_dir).resolve()
     source = Path(run_dir).resolve()
-    expected_root = (
-        project_dir
-        / "results"
-        / "invert_timestamp_runs"
-        / METHOD_DIRECTORY
-    ).resolve()
+    expected_parent = (
+        Path(source_root).resolve()
+        if source_root is not None
+        else project_dir / "results" / "invert_timestamp_runs"
+    )
+    expected_root = (expected_parent / METHOD_DIRECTORY).resolve()
     if not _is_relative_to(source, expected_root):
         raise RuntimeError("run directory is outside the expected result root")
     if not source.is_dir():
@@ -319,7 +374,11 @@ def copy_and_verify_results(project_dir, result_root, run_dir):
 
 def runtime_environment(runtime_dir):
     env = os.environ.copy()
+    gpu_id = str(env.get("DEML_GPU_ID", "0")).strip()
+    if not re.fullmatch(r"[0-9]+", gpu_id):
+        raise ValueError("DEML_GPU_ID must be one non-negative GPU index")
     env.update({
+        "CUDA_VISIBLE_DEVICES": gpu_id,
         "HF_HOME": str(Path(runtime_dir) / "hf-cache"),
         "HF_HUB_DISABLE_PROGRESS_BARS": "1",
         "TRANSFORMERS_NO_ADVISORY_WARNINGS": "1",
@@ -337,8 +396,18 @@ def run_bundle(args):
     runtime_dir.mkdir(parents=True, exist_ok=True)
     result_root.mkdir(parents=True, exist_ok=True)
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    progress = ProgressPrinter(initial=35)
+    progress = ProgressPrinter(stream=sys.stderr, initial=35)
     env = runtime_environment(runtime_dir)
+    smoke_test = bool(getattr(args, "smoke_test", False))
+    experiment_config = EXPERIMENT_CONFIG
+    experiment_run_root = None
+    copy_root = result_root
+    if smoke_test:
+        smoke = prepare_smoke_experiment(project_dir, runtime_dir)
+        experiment_config = smoke["config"]
+        experiment_run_root = smoke["run_root"]
+        copy_root = smoke["copy_root"]
+        append_log(args.log_file, "running explicit one-click smoke test")
 
     append_log(args.log_file, "checking/downloading model {}".format(MODEL_ID))
     model_status = run_with_heartbeat(
@@ -365,6 +434,8 @@ def run_bundle(args):
         args.log_file,
         progress,
         offline_env,
+        experiment_config=experiment_config,
+        run_root=experiment_run_root,
     )
     if experiment_status != 0:
         return EXIT_EXPERIMENT_FAILURE
@@ -372,8 +443,9 @@ def run_bundle(args):
     try:
         destination = copy_and_verify_results(
             project_dir,
-            result_root,
+            copy_root,
             run_dir,
+            source_root=experiment_run_root,
         )
     except Exception:
         append_log(args.log_file, traceback.format_exc())
@@ -398,6 +470,7 @@ def build_parser():
     run_parser.add_argument("--runtime", required=True)
     run_parser.add_argument("--result-root", required=True)
     run_parser.add_argument("--log-file", required=True)
+    run_parser.add_argument("--smoke-test", action="store_true")
     return parser
 
 

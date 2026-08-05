@@ -5,7 +5,7 @@
     "suffix_v2_0_layer_weights": "Raw layer weights; effective in-range weights are normalized before use.",
     "suffix_v2_0_phase1": "Direction-dominant joint-error optimization with per-step SGD and frozen prefix/padding.",
     "suffix_v2_0_phase2": "Magnitude-dominant joint-error optimization with persistent Adam, Phase-1 proximity, and range constraints.",
-    "suffix_v2_0_candidate_pools": "Stage 4 uses embedding 10/20 plus PPL 10; repair uses embedding 20 plus PPL 10 and its explicit current-token baseline.",
+    "suffix_v2_0_candidate_pools": "Stage 4 uses embedding 10/20 plus PPL 10 plus the pre-selection current token; repair uses embedding 20 plus PPL 10 and its explicit current-token baseline.",
     "suffix_v2_0_cumulative": "CUSUM kappa/threshold are initial heuristic values that still require experimental calibration.",
     "suffix_v2_0_classifier_enabled": "Keep the provider interface but do not require or call it while false. When true, provider absence or invalid results are fatal."
   },

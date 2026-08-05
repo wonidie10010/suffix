@@ -690,7 +690,57 @@ def get_model(base_model_name,
     return tokenizer, model
 
 
-def get_hidden_state(tokenizer, model, layer_id, prompt=None, input_embed=None, target_attention_mask=None, up_to=True):
+def ensure_suffix_v2_committed_prefix(
+        input_ids,
+        attention_mask,
+        tokenizer,
+        selected_advanced_method):
+    """Give suffix v2.0 the fixed committed prefix required by its PPL stage."""
+    if selected_advanced_method != "suffix_reoptimization_v2.0":
+        return input_ids, attention_mask
+
+    special_ids = {int(token_id) for token_id in tokenizer.all_special_ids}
+    if int(input_ids[0, 0].item()) in special_ids:
+        return input_ids, attention_mask
+
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None or int(eos_token_id) not in special_ids:
+        raise ValueError(
+            "suffix v2.0 requires the tokenizer EOS special token as its "
+            "committed prefix"
+        )
+
+    prefix_ids = torch.full(
+        (input_ids.shape[0], 1),
+        int(eos_token_id),
+        dtype=input_ids.dtype,
+        device=input_ids.device,
+    )
+    prefix_mask = torch.ones(
+        (attention_mask.shape[0], 1),
+        dtype=attention_mask.dtype,
+        device=attention_mask.device,
+    )
+    return (
+        torch.cat((prefix_ids, input_ids), dim=1),
+        torch.cat((prefix_mask, attention_mask), dim=1),
+    )
+
+
+def experiment_exit_code_for_records(run_records):
+    """Return a failing exit code when any sample reports a fatal failure."""
+    return 2 if any(record.get("fatal_failure") for record in run_records) else 0
+
+
+def get_hidden_state(
+        tokenizer,
+        model,
+        layer_id,
+        prompt=None,
+        input_embed=None,
+        target_attention_mask=None,
+        up_to=True,
+        selected_advanced_method=None):
     assert(prompt != None or input_embed != None)
     hidden_state_list = []
     hook_handles = []
@@ -714,8 +764,16 @@ def get_hidden_state(tokenizer, model, layer_id, prompt=None, input_embed=None, 
     if prompt != None:
         with torch.no_grad():
             target_token = tokenizer(prompt, padding=True, truncation=False, return_tensors='pt')
-            target_input_ids = target_token['input_ids'].to(get_model_device(model))
-            target_attention_mask = target_token['attention_mask'].to(get_model_device(model))
+            target_input_ids, target_attention_mask = (
+                ensure_suffix_v2_committed_prefix(
+                    target_token['input_ids'],
+                    target_token['attention_mask'],
+                    tokenizer,
+                    selected_advanced_method,
+                )
+            )
+            target_input_ids = target_input_ids.to(get_model_device(model))
+            target_attention_mask = target_attention_mask.to(get_model_device(model))
             inputs = {'input_ids': target_input_ids, 'attention_mask': target_attention_mask}
             
             hook_handles = register_layer_hooks(
@@ -1729,7 +1787,13 @@ def main(args):
             for sample_idx, prompt_sample in enumerate(prompt_samples):
                 prompt_ = prompt_sample["text"]
                 total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(
-                    tokenizer, model, layer_id=args.num_invert_layers, prompt=prompt_, up_to=False)
+                    tokenizer,
+                    model,
+                    layer_id=args.num_invert_layers,
+                    prompt=prompt_,
+                    up_to=False,
+                    selected_advanced_method=selected_advanced_method,
+                )
                 cgmr_target_hidden_states = None
                 suffix_v2_0_target_hidden_states = None
                 if selected_advanced_method == "suffix_reoptimization_v2.0":
@@ -1778,7 +1842,13 @@ def main(args):
             prompt_text = str(prompt)
             if cached_target_states is None:
                 total_input_ids, total_attention_mask, _, all_hidden_states = get_hidden_state(
-                    tokenizer, model, layer_id=args.num_invert_layers, prompt=prompt, up_to=False)
+                    tokenizer,
+                    model,
+                    layer_id=args.num_invert_layers,
+                    prompt=prompt,
+                    up_to=False,
+                    selected_advanced_method=selected_advanced_method,
+                )
                 next_hidden_states_last = all_hidden_states[-1].detach().requires_grad_(False)
                 cgmr_target_hidden_states = None
                 suffix_v2_0_target_hidden_states = None
@@ -3188,7 +3258,7 @@ def main(args):
 
         if worker_spec is None:
             write_experiment_average_summary(txt_file, run_records)
-            return 0
+            return experiment_exit_code_for_records(run_records)
         completed_indices = [
             int(record["global_index"]) for record in run_records
         ]

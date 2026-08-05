@@ -8,7 +8,7 @@
 
 1. 旧 suffix 版本的误差体系、候选重排、异常判断和接受策略不能直接代表已经确定的 v2.0 方法；若直接修改旧 sidecar，会破坏历史 selector、回退能力和实验可比性。
 2. v2.0 要求把连续优化、连续诊断、当前位置候选评分和 repair 判断统一到 float32 的方向—尺寸联合误差，并且只使用目标层 L 及其后续 L+1、L+2。旧版本路径不能在不改变语义的情况下隐式复用。
-3. Stage 4、局部 repair、累计区间 repair 的候选池和接受规则不同。特别是 Stage 4 不允许加入当前 token，而 repair 只有在当前位置严格改善超过 `replace_epsilon=1e-8` 时才替换。
+3. Stage 4、局部 repair、累计区间 repair 的候选池和接受规则不同。Stage 4 将进入当前位置选择前的当前 token 作为普通候选，与 Embedding/PPL 候选统一评分；repair 只有在当前位置严格改善超过 `replace_epsilon=1e-8` 时才替换。
 4. 全局联合误差和 Ground Truth accuracy 都只能作为离线诊断，不能用于 token 选择、repair、最终接受或回滚。最终接受必须只受硬失败控制。
 5. 十样本正式实验需要四张 GPU 做样本级并行，但四个 worker 不能并发写同一 artifact，也不能产生四份正式 run；旧的一键串行汇总结构无法满足这一约束。
 
@@ -21,7 +21,7 @@
 | 多层范围 | 旧版本各自定义 | L、L+1、L+2，原始权重 1、0.5、0.25 | 越界层删除后重新归一化，不读取 L 之前的层 |
 | 连续优化 | 旧版本各自流程 | Phase 1 每步重建 SGD；Phase 2 持久 Adam | 默认分别为 1000 步/0.01 和 50 步/0.001；冻结特殊前缀与 padding |
 | Stage 3 | 无 v2.0 冻结诊断 | 一次性计算并冻结 `c_i` 与 `tau_c` | `tau_c = median(c) + 3 * max(MAD(c), 1e-8)` |
-| Stage 4 候选 | 旧版本候选规则 | 正常 Embedding 10 + PPL 10；扩展 Embedding 20 + PPL 10 | classifier 当前关闭；Stage 4 不加入当前 token |
+| Stage 4 候选 | 旧版本候选规则 | 正常 Embedding 10 + PPL 10 + 当前 token；扩展 Embedding 20 + PPL 10 + 当前 token | classifier 当前关闭；当前 token 无特殊优先级 |
 | 当前位置评分 | 旧版本各自评分 | 只评分位置 i 的多层联合误差 | 不读取 i+1、i+2 或短窗口 |
 | 在线异常 | 旧版本离线/其他门控 | 前缀 median/MAD 与 warmup `d_i > tau_c` | 当前点不进入自身阈值历史 |
 | 累计触发 | 无此 v2.0 状态 | robust 单侧 CUSUM | 默认 `kappa=0.5`、阈值 5.0，属于尚需实验校准的初始启发式值 |

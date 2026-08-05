@@ -596,6 +596,10 @@ def _multilayer_loss(collected, targets, layers, weights, valid_mask,
     return total, direction_total, magnitude_total
 
 
+def _adam_epsilon_for_dtype(dtype):
+    return max(1e-8, float(torch.finfo(dtype).tiny))
+
+
 def _optimize_phase(model, optimizable, prefix_embedding, targets, attention_mask,
                     layers, weights, valid_mask, epoch, lr,
                     direction_weight, magnitude_weight, range_bound,
@@ -611,7 +615,11 @@ def _optimize_phase(model, optimizable, prefix_embedding, targets, attention_mas
         )
     persistent_optimizer = None
     if optimizer_name == "Adam":
-        persistent_optimizer = torch.optim.Adam([variable], lr=float(lr))
+        persistent_optimizer = torch.optim.Adam(
+            [variable],
+            lr=float(lr),
+            eps=_adam_epsilon_for_dtype(variable.dtype),
+        )
     history = []
     for step in range(int(epoch)):
         if clip:
@@ -998,6 +1006,7 @@ def _run_discrete(engine, entry_tokens, valid_positions, continuous_values,
         config.continuous_mad_multiplier, config.mad_epsilon,
     )
     for position in valid_positions:
+        current_token_i = int(tokens[position])
         embedding_top_k = (
             config.normal_embedding_top_k
             if continuous_values[position] <= tau_c
@@ -1005,6 +1014,7 @@ def _run_discrete(engine, entry_tokens, valid_positions, continuous_values,
         )
         candidates, generation_failed = engine.candidate_pool(
             position, tokens, embedding_top_k,
+            include_current=current_token_i,
             include_classifier=(
                 continuous_values[position] > tau_c
             ),
@@ -1018,6 +1028,7 @@ def _run_discrete(engine, entry_tokens, valid_positions, continuous_values,
             "position": position,
             "stage4_embedding_top_k": embedding_top_k,
             "candidate_generation_failed": generation_failed,
+            "candidate_count": len(scored),
             "stage4_candidates": copy.deepcopy(scored),
             "stage4_selected_token": chosen["token_id"],
             "pre_repair": copy.deepcopy(metric),

@@ -28,7 +28,6 @@ show_progress() {
 }
 
 finish_success() {
-    show_progress 100
     printf '\n结束实验\n' >&2
     exit 0
 }
@@ -115,12 +114,37 @@ fi
 
 REQUIREMENTS_HASH="$(sha256sum "${PROJECT_DIR}/requirements.txt" \
     | awk '{print substr($1,1,12)}')"
-ENV_PREFIX="${RUNTIME_DIR}/envs/deml-${REQUIREMENTS_HASH}"
+ENV_RUNTIME_DIR="${RUNTIME_DIR}"
+CASE_PROBE_DIR="${RUNTIME_DIR}/case-probe-${RUN_STAMP}"
+if ! mkdir -p "${CASE_PROBE_DIR}" \
+        || ! : >"${CASE_PROBE_DIR}/probe" \
+        || ! : >"${CASE_PROBE_DIR}/PROBE"; then
+    fail_experiment "无法检查运行目录文件系统" 3
+fi
+CASE_ENTRY_COUNT="$(find "${CASE_PROBE_DIR}" -maxdepth 1 -type f \
+    | wc -l | tr -d '[:space:]')"
+rm -f "${CASE_PROBE_DIR}/probe" "${CASE_PROBE_DIR}/PROBE"
+rmdir "${CASE_PROBE_DIR}" >/dev/null 2>&1 || true
+if [[ "${CASE_ENTRY_COUNT}" != "2" ]]; then
+    PROJECT_HASH="$(printf '%s' "${PROJECT_DIR}" | sha256sum \
+        | awk '{print substr($1,1,12)}')"
+    ENV_RUNTIME_DIR="${HOME}/.cache/deml-one-click/${PROJECT_HASH}-${REQUIREMENTS_HASH}"
+fi
+if ! mkdir -p "${ENV_RUNTIME_DIR}/envs" \
+        "${ENV_RUNTIME_DIR}/conda-pkgs" >/dev/null 2>&1; then
+    fail_experiment "无法创建隔离环境目录" 3
+fi
+printf '[%s] environment_runtime=%s\n' "$(date '+%F %T')" \
+    "${ENV_RUNTIME_DIR}" >>"${LOG_FILE}"
+ENV_PREFIX="${ENV_RUNTIME_DIR}/envs/deml-${REQUIREMENTS_HASH}"
 ENV_PYTHON="${ENV_PREFIX}/bin/python"
 MODEL_CACHE_DIR="${RUNTIME_DIR}/hf-cache/hub/models--Qwen--Qwen2.5-1.5B"
 AVAILABLE_KB="$(df -Pk "${BUNDLE_DIR}" 2>>"${LOG_FILE}" \
     | awk 'NR==2 {print $4}')"
-if [[ ! "${AVAILABLE_KB}" =~ ^[0-9]+$ ]]; then
+ENV_AVAILABLE_KB="$(df -Pk "${ENV_RUNTIME_DIR}" 2>>"${LOG_FILE}" \
+    | awk 'NR==2 {print $4}')"
+if [[ ! "${AVAILABLE_KB}" =~ ^[0-9]+$ \
+        || ! "${ENV_AVAILABLE_KB}" =~ ^[0-9]+$ ]]; then
     fail_experiment "无法检查磁盘空间" 3
 fi
 if [[ ! -x "${ENV_PYTHON}" || ! -d "${MODEL_CACHE_DIR}" ]]; then
@@ -128,7 +152,7 @@ if [[ ! -x "${ENV_PYTHON}" || ! -d "${MODEL_CACHE_DIR}" ]]; then
 else
     REQUIRED_KB=$((1 * 1024 * 1024))
 fi
-if (( AVAILABLE_KB < REQUIRED_KB )); then
+if (( AVAILABLE_KB < REQUIRED_KB || ENV_AVAILABLE_KB < REQUIRED_KB )); then
     fail_experiment "磁盘空间不足" 3
 fi
 show_progress 2
@@ -137,7 +161,7 @@ MINICONDA_NAME="Miniconda3-py310_26.5.3-1-Linux-x86_64.sh"
 MINICONDA_URL="https://repo.anaconda.com/miniconda/${MINICONDA_NAME}"
 MINICONDA_SHA256="4a82fe0a50a28e8a9406b3ed8e465b7009aa7d0225566802c3370df96b10d834"
 MINICONDA_INSTALLER="${RUNTIME_DIR}/downloads/${MINICONDA_NAME}"
-LOCAL_CONDA="${RUNTIME_DIR}/miniconda-py310-26.5.3"
+LOCAL_CONDA="${ENV_RUNTIME_DIR}/miniconda-py310-26.5.3"
 
 if command -v conda >/dev/null 2>&1; then
     CONDA_EXE="$(command -v conda)"
@@ -170,14 +194,21 @@ else
 fi
 show_progress 12
 
-export CONDA_PKGS_DIRS="${RUNTIME_DIR}/conda-pkgs"
+export CONDA_PKGS_DIRS="${ENV_RUNTIME_DIR}/conda-pkgs"
 export PYTHONNOUSERSITE=1
 export PIP_NO_INPUT=1
 export HF_HOME="${RUNTIME_DIR}/hf-cache"
+GPU_ID="${DEML_GPU_ID:-0}"
+if [[ ! "${GPU_ID}" =~ ^[0-9]+$ ]]; then
+    fail_experiment "DEML_GPU_ID 必须是单个非负 GPU 编号" 7
+fi
+export CUDA_VISIBLE_DEVICES="${GPU_ID}"
+printf '[%s] physical_gpu=%s\n' "$(date '+%F %T')" "${GPU_ID}" \
+    >>"${LOG_FILE}"
 
 ENV_READY=0
 if [[ -x "${ENV_PYTHON}" ]]; then
-    if "${ENV_PYTHON}" "${SCRIPT_DIR}/suffix_v2_0_parallel_runner.py" check-env \
+    if "${ENV_PYTHON}" "${SCRIPT_DIR}/runner.py" check-env \
             --project "${PROJECT_DIR}" >>"${LOG_FILE}" 2>&1; then
         ENV_READY=1
     fi
@@ -186,7 +217,9 @@ fi
 if (( ENV_READY == 0 )); then
     if [[ -x "${ENV_PYTHON}" ]]; then
         if ! run_with_heartbeat 12 14 \
-                "${CONDA_EXE}" install -y -p "${ENV_PREFIX}" \
+                "${CONDA_EXE}" install -y \
+                --override-channels --channel conda-forge \
+                -p "${ENV_PREFIX}" \
                 python=3.10.20 pip=26.0.1; then
             fail_experiment "Python 环境修复失败" 5
         fi
@@ -199,7 +232,9 @@ if (( ENV_READY == 0 )); then
             fi
         fi
         if ! run_with_heartbeat 12 14 \
-                "${CONDA_EXE}" create -y -p "${ENV_PREFIX}" \
+                "${CONDA_EXE}" create -y \
+                --override-channels --channel conda-forge \
+                -p "${ENV_PREFIX}" \
                 python=3.10.20 pip=26.0.1; then
             fail_experiment "Python 环境创建失败" 5
         fi
@@ -213,7 +248,7 @@ if (( ENV_READY == 0 )); then
     fi
 fi
 
-if ! "${ENV_PYTHON}" "${SCRIPT_DIR}/suffix_v2_0_parallel_runner.py" check-env \
+if ! "${ENV_PYTHON}" "${SCRIPT_DIR}/runner.py" check-env \
         --project "${PROJECT_DIR}" >>"${LOG_FILE}" 2>&1; then
     fail_experiment "环境版本校验失败" 6
 fi
@@ -245,16 +280,22 @@ if [[ "${CONDA_PREFIX:-}" != "${ENV_PREFIX}" ]]; then
     fail_experiment "环境切换校验失败" 7
 fi
 
-"${ENV_PYTHON}" "${SCRIPT_DIR}/suffix_v2_0_parallel_runner.py" run \
-    --project "${PROJECT_DIR}" \
-    --repo-root "${REPO_ROOT}" \
-    --python "${ENV_PYTHON}" \
-    --timestamp "${RUN_STAMP}"
+RUNNER_ARGS=(
+    run
+    --project "${PROJECT_DIR}"
+    --runtime "${RUNTIME_DIR}"
+    --result-root "${RESULT_ROOT}"
+    --log-file "${LOG_FILE}"
+)
+if [[ "${DEML_SMOKE_TEST:-0}" == "1" ]]; then
+    RUNNER_ARGS+=(--smoke-test)
+fi
+"${ENV_PYTHON}" "${SCRIPT_DIR}/runner.py" "${RUNNER_ARGS[@]}"
 RUNNER_STATUS="$?"
 
 case "${RUNNER_STATUS}" in
     0)
-        exit 0
+        finish_success
         ;;
     20)
         fail_experiment "模型下载失败" 20

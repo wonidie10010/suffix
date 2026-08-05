@@ -1,8 +1,8 @@
 # 内部文件
 
-这里存放一键实验入口所依赖的 bootstrap、suffix v2.0 四卡 runner、旧版兼容
-runner 及其单元测试。请从上一级目录运行 `一键运行_suffix_v2_0.py`；正式入口不会
-调用旧版 runner，也不会选择 suffix v2.0 之外的方法。
+这里存放一键实验入口所依赖的 bootstrap、suffix v2.0 单卡 runner 及其单元测试。
+请运行 `实验/一键运行_suffix_v2_0.py`；正式入口只启动一个实验进程，只使用
+`DEML_GPU_ID` 指定的一张 GPU，并且不会选择 suffix v2.0 之外的方法。
 
 启动器直接使用仓库根目录中的项目源码、`requirements.txt` 和实验配置，不再维护
 内嵌项目副本。运行环境与日志仍写入上一级目录的 `.runtime/`，

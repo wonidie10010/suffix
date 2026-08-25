@@ -7,17 +7,26 @@ from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
-LAUNCHER = HERE.parents[1] / "一键运行_suffix_v2_0.py"
-SPEC = importlib.util.spec_from_file_location("one_click_suffix_v20", LAUNCHER)
+LAUNCHER = HERE.parents[1] / "一键运行_suffix_v2_1.py"
+SPEC = importlib.util.spec_from_file_location("one_click_suffix_v21", LAUNCHER)
 launcher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(launcher)
 
 
-class OneClickSuffixV20Tests(unittest.TestCase):
-    def test_launcher_uses_repository_root_project(self):
+class OneClickSuffixV21Tests(unittest.TestCase):
+    def test_launcher_targets_v21_layout_and_config(self):
         self.assertEqual(HERE.parents[2], launcher.PROJECT_DIR)
+        self.assertEqual(
+            "run_experiment_suffix_v2_1.sh",
+            launcher.BOOTSTRAP_SCRIPT.name,
+        )
+        self.assertEqual("runner_suffix_v2_1.py", launcher.SINGLE_GPU_RUNNER.name)
+        self.assertEqual(
+            "l24_airport_medical_suffix_v2_1_no_cgmr.json",
+            launcher.EXPERIMENT_CONFIG.name,
+        )
 
-    def test_launcher_uses_only_v2_bootstrap(self):
+    def test_launcher_uses_only_v21_bootstrap(self):
         completed = types.SimpleNamespace(returncode=0)
         run = mock.Mock(return_value=completed)
         status = launcher.main(
@@ -27,9 +36,9 @@ class OneClickSuffixV20Tests(unittest.TestCase):
         self.assertEqual(0, status)
         command = run.call_args.args[0]
         self.assertEqual("/bin/bash", command[0])
-        self.assertEqual("run_experiment.sh", Path(command[1]).name)
+        self.assertEqual("run_experiment_suffix_v2_1.sh", Path(command[1]).name)
 
-    def test_smoke_test_is_forwarded_explicitly_without_changing_default(self):
+    def test_smoke_test_is_forwarded_explicitly(self):
         completed = types.SimpleNamespace(returncode=0)
         run = mock.Mock(return_value=completed)
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -53,29 +62,22 @@ class OneClickSuffixV20Tests(unittest.TestCase):
         self.assertEqual(3, status)
         run.assert_not_called()
 
-    def test_top_level_has_only_the_two_versioned_launchers(self):
+    def test_launcher_is_the_only_v21_top_level_entry(self):
         self.assertEqual(
             {"一键运行_suffix_v2_0.py", "一键运行_suffix_v2_1.py"},
             {path.name for path in HERE.parents[1].glob("*.py")},
         )
-        self.assertEqual([], list(HERE.parent.glob("*.py")))
 
-    def test_bootstrap_prepares_environment_and_runs_only_v2(self):
-        source = (HERE / "run_experiment.sh").read_text(encoding="utf-8")
-        self.assertIn("download_miniconda", source)
-        self.assertIn("-m pip install", source)
-        self.assertIn("-m pip check", source)
-        self.assertIn("torch.cuda.is_available()", source)
-        self.assertIn('"${SCRIPT_DIR}/runner.py" check-env', source)
-        self.assertIn('"${SCRIPT_DIR}/runner.py" "${RUNNER_ARGS[@]}"', source)
-        self.assertIn("RUNNER_ARGS=(", source)
-        self.assertIn("RUNNER_ARGS+=(--smoke-test)", source)
+    def test_bootstrap_is_v21_only_and_uses_shared_runtime(self):
+        source = (HERE / "run_experiment_suffix_v2_1.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("suffix_reoptimization_v2.1", source)
+        self.assertIn("l24_airport_medical_suffix_v2_1_no_cgmr.json", source)
+        self.assertIn('RUNTIME_DIR="${BUNDLE_DIR}/.runtime"', source)
         self.assertIn("flock", source)
-        self.assertIn("CASE_ENTRY_COUNT", source)
-        self.assertIn('${HOME}/.cache/deml-one-click', source)
-        self.assertGreaterEqual(source.count("--override-channels"), 2)
-        self.assertGreaterEqual(source.count("--channel conda-forge"), 2)
-        self.assertNotIn("suffix_v2_0_parallel_runner.py", source)
+        self.assertIn("--smoke-test", source)
+        self.assertNotIn("suffix_reoptimization_v2.0", source)
         self.assertNotIn("suffix_v1_", source)
 
 

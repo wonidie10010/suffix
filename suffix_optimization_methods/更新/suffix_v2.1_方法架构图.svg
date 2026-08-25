@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1750" viewBox="0 0 2000 1750">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#555"/>
+    </marker>
+    <style>
+      .title { font: 700 30px 'Microsoft YaHei', Arial, sans-serif; fill: #222; }
+      .subtitle { font: 15px 'Microsoft YaHei', Arial, sans-serif; fill: #555; }
+      .lane-title { font: 700 19px 'Microsoft YaHei', Arial, sans-serif; fill: #333; }
+      .node-text { font: 15px 'Microsoft YaHei', Arial, sans-serif; fill: #222; text-anchor: middle; }
+      .small { font: 13px 'Microsoft YaHei', Arial, sans-serif; fill: #444; text-anchor: middle; }
+      .edge-label { font: 13px 'Microsoft YaHei', Arial, sans-serif; fill: #444; }
+      .edge { fill: none; stroke: #555; stroke-width: 2; marker-end: url(#arrow); }
+      .blue { fill: #dae8fc; stroke: #6c8ebf; stroke-width: 2; }
+      .purple { fill: #e1d5e7; stroke: #9673a6; stroke-width: 2; }
+      .green { fill: #d5e8d4; stroke: #82b366; stroke-width: 2; }
+      .orange { fill: #ffe6cc; stroke: #d79b00; stroke-width: 2; }
+      .gray { fill: #f5f5f5; stroke: #666; stroke-width: 2; }
+      .red { fill: #f8cecc; stroke: #b85450; stroke-width: 2; }
+      .band-gray { fill: #fafafa; stroke: #d0d0d0; stroke-width: 1; }
+      .band-blue { fill: #f3f8fe; stroke: #c8daf0; stroke-width: 1; }
+      .band-purple { fill: #f8f4fa; stroke: #d8c9df; stroke-width: 1; }
+      .band-green { fill: #f4faf3; stroke: #cadfc8; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="2000" height="1750" fill="#ffffff"/>
+  <text x="1000" y="42" class="title" text-anchor="middle">Suffix v2.1 Canonical 方法架构图</text>
+  <text x="1000" y="68" class="subtitle" text-anchor="middle">单阶段连续优化 → committed-prefix mixed context → 一次向量修复 → 一次局部离散修复 → 独立诊断</text>
+
+  <rect x="20" y="90" width="1960" height="150" rx="18" class="band-gray"/>
+  <rect x="20" y="255" width="1960" height="315" rx="18" class="band-blue"/>
+  <rect x="20" y="585" width="1960" height="390" rx="18" class="band-purple"/>
+  <rect x="20" y="990" width="1960" height="365" rx="18" class="band-green"/>
+  <rect x="20" y="1370" width="1960" height="315" rx="18" class="band-gray"/>
+
+  <text x="45" y="118" class="lane-title">0 入口合同</text>
+  <text x="45" y="283" class="lane-title">1 单阶段连续优化</text>
+  <text x="45" y="613" class="lane-title">2 因果向量诊断 / 修复</text>
+  <text x="45" y="1018" class="lane-title">3 离散候选 / 局部退化</text>
+  <text x="45" y="1398" class="lane-title">4 正式结果 / 离线诊断</text>
+
+  <!-- Entry -->
+  <rect x="120" y="130" width="210" height="75" rx="14" class="gray"/>
+  <text x="225" y="159" class="node-text"><tspan x="225">v2.1 selector / enabled</tspan><tspan x="225" dy="22">显式选择但关闭 → fail-fast</tspan></text>
+
+  <rect x="430" y="130" width="220" height="75" rx="14" class="gray"/>
+  <text x="540" y="159" class="node-text"><tspan x="540">冻结 entry token / embedding</tspan><tspan x="540" dy="22">prefix / padding / mask</tspan></text>
+
+  <rect x="750" y="130" width="265" height="75" rx="14" class="gray"/>
+  <text x="882" y="152" class="node-text"><tspan x="882">解析 I、K={L,L+1,L+2}</tspan><tspan x="882" dy="21">归一化层权重 / 构造 V_legal</tspan><tspan x="882" dy="21">检查 causal mixed-forward 合同</tspan></text>
+
+  <polygon points="1160,130 1240,167 1160,205 1080,167" class="gray"/>
+  <text x="1160" y="162" class="node-text"><tspan x="1160">preflight</tspan><tspan x="1160" dy="19">通过？</tspan></text>
+
+  <!-- Global optimization -->
+  <rect x="120" y="320" width="210" height="80" rx="14" class="blue"/>
+  <text x="225" y="350" class="node-text"><tspan x="225">detached full base</tspan><tspan x="225" dy="22">仅 I 中 embedding 可训练</tspan></text>
+
+  <rect x="405" y="320" width="190" height="80" rx="14" class="blue"/>
+  <text x="500" y="350" class="node-text"><tspan x="500">创建一个</tspan><tspan x="500" dy="22">persistent Adam</tspan></text>
+
+  <rect x="670" y="320" width="215" height="80" rx="14" class="blue"/>
+  <text x="777" y="341" class="node-text"><tspan x="777">按 refresh interval</tspan><tspan x="777" dy="21">重算 detached</tspan><tspan x="777" dy="21">legal-vocab anchors</tspan></text>
+
+  <rect x="960" y="320" width="205" height="80" rx="14" class="blue"/>
+  <text x="1062" y="350" class="node-text"><tspan x="1062">L/L+1/L+2</tspan><tspan x="1062" dy="22">multi-layer forward</tspan></text>
+
+  <rect x="1240" y="320" width="250" height="80" rx="14" class="blue"/>
+  <text x="1365" y="340" class="node-text"><tspan x="1365">L_hidden = direction + magnitude</tspan><tspan x="1365" dy="21">L_vocab = normalized soft-min</tspan><tspan x="1365" dy="21">L_global = L_hidden + λv L_vocab</tspan></text>
+
+  <polygon points="1615,315 1715,360 1615,405 1515,360" class="blue"/>
+  <text x="1615" y="353" class="node-text"><tspan x="1615">formal state / loss</tspan><tspan x="1615" dy="20">有限？</tspan></text>
+
+  <rect x="1505" y="455" width="220" height="70" rx="14" class="blue"/>
+  <text x="1615" y="483" class="node-text"><tspan x="1615">Adam step</tspan><tspan x="1615" dy="21">moments 不因 anchor refresh 重置</tspan></text>
+
+  <polygon points="1325,450 1415,490 1325,530 1235,490" class="blue"/>
+  <text x="1325" y="483" class="node-text"><tspan x="1325">global steps</tspan><tspan x="1325" dy="20">完成？</tspan></text>
+
+  <rect x="970" y="455" width="190" height="70" rx="14" class="blue"/>
+  <text x="1065" y="483" class="node-text"><tspan x="1065">冻结 E_work</tspan><tspan x="1065" dy="21">作为 causal warm-start</tspan></text>
+
+  <!-- Causal vector loop -->
+  <rect x="110" y="665" width="250" height="90" rx="14" class="purple"/>
+  <text x="235" y="688" class="node-text"><tspan x="235">取下一个有效位置 i</tspan><tspan x="235" dy="21">j&lt;i: committed token embedding</tspan><tspan x="235" dy="21">j≥i: detached E_work</tspan><tspan x="235" dy="21">禁止 stale KV cache</tspan></text>
+
+  <rect x="440" y="675" width="200" height="70" rx="14" class="purple"/>
+  <text x="540" y="703" class="node-text"><tspan x="540">fresh 计算 c_i、R_i</tspan><tspan x="540" dy="21">J_i = c_i + λv R_i</tspan></text>
+
+  <polygon points="760,665 850,710 760,755 670,710" class="purple"/>
+  <text x="760" y="704" class="node-text"><tspan x="760">J_i &gt; τ_J ?</tspan></text>
+
+  <rect x="920" y="620" width="220" height="80" rx="14" class="purple"/>
+  <text x="1030" y="648" class="node-text"><tspan x="1030">新建 e_i-only local Adam</tspan><tspan x="1030" dy="21">同一 J family / 一次 repair trial</tspan></text>
+
+  <polygon points="1245,615 1335,660 1245,705 1155,660" class="purple"/>
+  <text x="1245" y="653" class="node-text"><tspan x="1245">trial 安全且</tspan><tspan x="1245" dy="20">finite？</tspan></text>
+
+  <rect x="1390" y="620" width="225" height="80" rx="14" class="purple"/>
+  <text x="1502" y="641" class="node-text"><tspan x="1502">old/new 均 fresh retrieval</tspan><tspan x="1502" dy="21">fresh forward 得 c、R、J</tspan><tspan x="1502" dy="21">不使用 stale anchor metric</tspan></text>
+
+  <polygon points="1760,615 1870,660 1760,705 1650,660" class="purple"/>
+  <text x="1760" y="643" class="small"><tspan x="1760">J_new &lt; J_old-ε_J</tspan><tspan x="1760" dy="18">且 c_new ≤ c_old+δ_c,max ?</tspan></text>
+
+  <rect x="1625" y="760" width="270" height="80" rx="14" class="purple"/>
+  <text x="1760" y="790" class="node-text"><tspan x="1760">接受 trial 或恢复 old e_i</tspan><tspan x="1760" dy="21">局部失败不污染 formal state</tspan></text>
+
+  <rect x="1260" y="865" width="360" height="75" rx="14" class="purple"/>
+  <text x="1440" y="886" class="node-text"><tspan x="1440">fresh 冻结 final continuous baseline</tspan><tspan x="1440" dy="21">c_i / R_i / J_i；之后 e_i 不再变化</tspan><tspan x="1440" dy="21">J_i&gt;τ_J → initial pool=expanded + unresolved flag</tspan></text>
+
+  <!-- Discretization -->
+  <rect x="110" y="1060" width="250" height="90" rx="14" class="green"/>
+  <text x="235" y="1082" class="node-text"><tspan x="235">构造 normal / expanded pool</tspan><tspan x="235" dy="21">embedding neighbors + prefix PPL</tspan><tspan x="235" dy="21">+ pre-selection current token</tspan><tspan x="235" dy="21">无 classifier</tspan></text>
+
+  <rect x="425" y="1070" width="220" height="70" rx="14" class="green"/>
+  <text x="535" y="1098" class="node-text"><tspan x="535">legal filter / token-id 去重</tspan><tspan x="535" dy="21">合并 source metadata</tspan></text>
+
+  <polygon points="760,1060 850,1105 760,1150 670,1105" class="green"/>
+  <text x="760" y="1098" class="node-text"><tspan x="760">pool 非空？</tspan></text>
+
+  <rect x="900" y="1060" width="240" height="90" rx="14" class="green"/>
+  <text x="1020" y="1082" class="node-text"><tspan x="1020">mixed candidate forward</tspan><tspan x="1020" dy="21">只替换位置 i 为 Emb(q)</tspan><tspan x="1020" dy="21">同口径计算 d_i(q)</tspan><tspan x="1020" dy="21">单个 nonfinite 候选丢弃</tspan></text>
+
+  <polygon points="1275,1060 1370,1105 1275,1150 1180,1105" class="green"/>
+  <text x="1275" y="1098" class="small"><tspan x="1275">存在 finite</tspan><tspan x="1275" dy="18">candidate？</tspan></text>
+
+  <rect x="1420" y="1060" width="210" height="90" rx="14" class="green"/>
+  <text x="1525" y="1082" class="node-text"><tspan x="1525">按 (d_i, token_id) 排序</tspan><tspan x="1525" dy="21">选择 d_old</tspan><tspan x="1525" dy="21">current 无特殊优先级</tspan></text>
+
+  <rect x="1690" y="1070" width="205" height="70" rx="14" class="orange"/>
+  <text x="1792" y="1098" class="node-text"><tspan x="1792">r_i=max(0,d_old-c_i)</tspan><tspan x="1792" dy="21">0 ≤ r_i ≤ 1</tspan></text>
+
+  <polygon points="1660,1190 1770,1240 1660,1290 1550,1240" class="orange"/>
+  <text x="1660" y="1223" class="small"><tspan x="1660">r_i&gt;τ_r 且</tspan><tspan x="1660" dy="18">首轮 normal？</tspan></text>
+
+  <rect x="1745" y="1280" width="210" height="60" rx="14" class="orange"/>
+  <text x="1850" y="1302" class="small"><tspan x="1850">一次 expanded union/rerank</tspan><tspan x="1850" dy="18">仅 d_new&lt;d_old-ε_d 替换</tspan></text>
+
+  <rect x="1320" y="1210" width="190" height="60" rx="14" class="gray"/>
+  <text x="1415" y="1232" class="node-text"><tspan x="1415">commit token</tspan><tspan x="1415" dy="20">记录 unresolved flags</tspan></text>
+
+  <polygon points="1120,1195 1215,1240 1120,1285 1025,1240" class="gray"/>
+  <text x="1120" y="1233" class="node-text"><tspan x="1120">还有位置？</tspan></text>
+
+  <!-- Finalization -->
+  <rect x="480" y="1460" width="260" height="90" rx="14" class="gray"/>
+  <text x="610" y="1482" class="node-text"><tspan x="610">构造 committed-consistent embedding</tspan><tspan x="610" dy="21">检查 token/embedding/shape/mask</tspan><tspan x="610" dy="21">与 fixed-position invariants</tspan></text>
+
+  <rect x="825" y="1470" width="240" height="70" rx="14" class="gray"/>
+  <text x="945" y="1498" class="node-text"><tspan x="945">冻结 formal tokens / embedding</tspan><tspan x="945" dy="21">accepted / rollback 固定</tspan></text>
+
+  <rect x="1150" y="1470" width="235" height="70" rx="14" class="gray"/>
+  <text x="1267" y="1498" class="node-text"><tspan x="1267">独立 offline diagnostics</tspan><tspan x="1267" dy="21">disabled → zero GT read</tspan></text>
+
+  <rect x="1450" y="1470" width="175" height="70" rx="14" class="gray"/>
+  <text x="1537" y="1498" class="node-text"><tspan x="1537">输出 JSONL</tspan><tspan x="1537" dy="21">正式结束</tspan></text>
+
+  <rect x="1710" y="1455" width="220" height="100" rx="14" class="red"/>
+  <text x="1820" y="1480" class="node-text"><tspan x="1820">Hard failure</tspan><tspan x="1820" dy="21">rollback entry snapshots</tspan><tspan x="1820" dy="21">局部可恢复 trial 不汇入此处</tspan></text>
+
+  <!-- Main arrows -->
+  <path d="M330 167 H430" class="edge"/><path d="M650 167 H750" class="edge"/><path d="M1015 167 H1080" class="edge"/>
+  <path d="M1160 205 V280 H225 V320" class="edge"/><text x="1172" y="228" class="edge-label">是</text>
+  <path d="M1240 167 H1820 V1455" class="edge"/><text x="1252" y="157" class="edge-label">否</text>
+
+  <path d="M330 360 H405" class="edge"/><path d="M595 360 H670" class="edge"/><path d="M885 360 H960" class="edge"/><path d="M1165 360 H1240" class="edge"/><path d="M1490 360 H1515" class="edge"/>
+  <path d="M1615 405 V455" class="edge"/><text x="1625" y="430" class="edge-label">是</text>
+  <path d="M1715 360 H1820 V1455" class="edge"/><text x="1722" y="350" class="edge-label">否</text>
+  <path d="M1505 490 H1415" class="edge"/><path d="M1235 490 H1160" class="edge"/><text x="1190" y="480" class="edge-label">是</text>
+  <path d="M1325 450 V420 H777 V400" class="edge"/><text x="1040" y="412" class="edge-label">否：下一 step / refresh cadence</text>
+  <path d="M970 490 H900 V625 H235 V665" class="edge"/>
+
+  <path d="M360 710 H440" class="edge"/><path d="M640 710 H670" class="edge"/>
+  <path d="M850 710 H880 V660 H920" class="edge"/><text x="864" y="699" class="edge-label">是</text>
+  <path d="M760 755 V902 H1260" class="edge"/><text x="772" y="782" class="edge-label">否</text>
+  <path d="M1140 660 H1155" class="edge"/><path d="M1335 660 H1390" class="edge"/><text x="1345" y="650" class="edge-label">是</text>
+  <path d="M1245 705 V800 H1625" class="edge"/><text x="1260" y="731" class="edge-label">trial 失败 / old safe</text>
+  <path d="M1615 660 H1650" class="edge"/><path d="M1760 705 V760" class="edge"/>
+  <path d="M1625 800 H1440 V865" class="edge"/>
+  <path d="M1440 940 V1015 H235 V1060" class="edge"/>
+
+  <path d="M360 1105 H425" class="edge"/><path d="M645 1105 H670" class="edge"/>
+  <path d="M850 1105 H900" class="edge"/><text x="862" y="1095" class="edge-label">是</text>
+  <path d="M760 1150 V1430 H1820 V1455" class="edge"/><text x="772" y="1172" class="edge-label">否</text>
+  <path d="M1140 1105 H1180" class="edge"/><path d="M1370 1105 H1420" class="edge"/><text x="1380" y="1095" class="edge-label">有</text>
+  <path d="M1275 1150 V1410 H1820 V1455" class="edge"/><text x="1287" y="1172" class="edge-label">无</text>
+  <path d="M1630 1105 H1690" class="edge"/><path d="M1792 1140 V1180 H1660 V1190" class="edge"/>
+  <path d="M1660 1290 V1310 H1745" class="edge"/><text x="1675" y="1305" class="edge-label">是</text>
+  <path d="M1550 1240 H1510" class="edge"/><text x="1520" y="1230" class="edge-label">否</text>
+  <path d="M1745 1310 H1660 V1340 H1415 V1270" class="edge"/>
+  <path d="M1320 1240 H1215" class="edge"/>
+  <path d="M1120 1195 V960 H235 V665" class="edge"/><text x="1132" y="1178" class="edge-label">是</text>
+  <path d="M1120 1285 V1415 H610 V1460" class="edge"/><text x="1132" y="1310" class="edge-label">否</text>
+
+  <path d="M740 1505 H825" class="edge"/><path d="M1065 1505 H1150" class="edge"/><path d="M1385 1505 H1450" class="edge"/>
+  <path d="M610 1460 V1425 H1820 V1455" class="edge"/><text x="630" y="1445" class="edge-label">invariant fail</text>
+
+  <!-- Notes -->
+  <rect x="120" y="455" width="700" height="80" rx="12" fill="#ffffff" stroke="#9db7d5" stroke-dasharray="6 4"/>
+  <text x="470" y="477" class="small"><tspan x="470">D_joint = α_dir D_dir + α_mag D_mag；同一口径用于 global / c_i / d_i</tspan><tspan x="470" dy="19">R = -τ_v[logsumexp(-q/τ_v)-log K_v]；anchor stop-gradient</tspan><tspan x="470" dy="19">无 Phase 2 / prox / range / weight decay / scheduler</tspan></text>
+
+  <rect x="110" y="840" width="820" height="85" rx="12" fill="#ffffff" stroke="#b69bc1" stroke-dasharray="6 4"/>
+  <text x="520" y="863" class="small"><tspan x="520">J_i = c_i + λ_v R_i；正式 gate 与 old/new acceptance 均使用 fresh anchor retrieval</tspan><tspan x="520" dy="19">repair accept: J_new &lt; J_old-ε_J 且 c_new ≤ c_old+δ_c,max</tspan><tspan x="520" dy="19">candidate 阶段开始后 continuous baseline 永久冻结</tspan></text>
+
+  <rect x="110" y="1285" width="780" height="50" rx="12" fill="#ffffff" stroke="#d79b00" stroke-dasharray="6 4"/>
+  <text x="500" y="1315" class="small">one expanded attempt only；no history / MAD / CUSUM / checkpoint / replay</text>
+
+  <text x="1000" y="1722" class="subtitle" text-anchor="middle">蓝=单阶段连续优化　紫=因果向量诊断/修复　绿=离散候选与评分　橙=局部退化检查　灰=final/diagnostics　红=hard failure</text>
+</svg>

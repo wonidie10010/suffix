@@ -12,11 +12,11 @@ LOCK_FILE="${RUNTIME_DIR}/suffix-experiment.lock"
 LOCK_OWNER_FILE="${RUNTIME_DIR}/suffix-experiment.lock.owner"
 LOCK_ACQUIRED=0
 LOCK_FD=9
-LOG_DIR=""
-RUN_STAMP=""
-LOG_FILE=""
 ACTIVE_PID=""
 LAST_PROGRESS=-1
+RUN_STAMP=""
+LOG_DIR=""
+LOG_FILE=""
 
 show_progress() {
     local percent="$1"
@@ -31,9 +31,18 @@ show_progress() {
     fi
 }
 
+release_runtime_lock() {
+    if (( LOCK_ACQUIRED == 1 )); then
+        rm -f "${LOCK_OWNER_FILE}" >/dev/null 2>&1 || true
+        flock -u "${LOCK_FD}" >/dev/null 2>&1 || true
+        eval "exec ${LOCK_FD}>&-" >/dev/null 2>&1 || true
+        LOCK_ACQUIRED=0
+    fi
+}
+
 finish_success() {
     release_runtime_lock
-    printf '\n结束实验\n' >&2
+    printf '\n结束 suffix v2.1 实验\n' >&2
     exit 0
 }
 
@@ -47,17 +56,8 @@ fail_experiment() {
     fi
     release_runtime_lock
     printf '\n实验失败：%s（详见运行日志）\n' "${reason}" >&2
-    printf '结束实验\n' >&2
+    printf '结束 suffix v2.1 实验\n' >&2
     exit "${exit_code}"
-}
-
-release_runtime_lock() {
-    if (( LOCK_ACQUIRED == 1 )); then
-        rm -f "${LOCK_OWNER_FILE}" >/dev/null 2>&1 || true
-        flock -u "${LOCK_FD}" >/dev/null 2>&1 || true
-        eval "exec ${LOCK_FD}>&-" >/dev/null 2>&1 || true
-        LOCK_ACQUIRED=0
-    fi
 }
 
 run_with_heartbeat() {
@@ -120,16 +120,23 @@ acquire_runtime_lock() {
 
 trap 'fail_experiment "实验被中断" 130' INT TERM
 
-printf '开始实验\n' >&2
+printf '开始 suffix v2.1 实验\n' >&2
 show_progress 0
 
+if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
+    fail_experiment "仅支持 Linux x86_64" 3
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    fail_experiment "系统缺少 sha256sum" 3
+fi
 if ! mkdir -p "${RUNTIME_DIR}" >/dev/null 2>&1; then
     fail_experiment "无法创建共享运行环境目录" 2
 fi
 acquire_runtime_lock
+
 RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 LOG_DIR="${RUNTIME_DIR}/logs"
-LOG_FILE="${LOG_DIR}/${RUN_STAMP}.log"
+LOG_FILE="${LOG_DIR}/suffix_v2_1-${RUN_STAMP}.log"
 if ! mkdir -p "${LOG_DIR}" "${RUNTIME_DIR}/downloads" \
         "${RUNTIME_DIR}/envs" "${RUNTIME_DIR}/conda-pkgs" \
         "${RESULT_ROOT}" >/dev/null 2>&1; then
@@ -141,17 +148,13 @@ touch "${LOG_FILE}" >/dev/null 2>&1 || \
 {
     printf '[%s] bundle=%s\n' "$(date '+%F %T')" "${BUNDLE_DIR}"
     printf '[%s] project=%s\n' "$(date '+%F %T')" "${PROJECT_DIR}"
+    printf '[%s] method=suffix_reoptimization_v2.1\n' "$(date '+%F %T')"
 } >>"${LOG_FILE}"
 
-if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
-    fail_experiment "仅支持 Linux x86_64" 3
-fi
-if ! command -v sha256sum >/dev/null 2>&1; then
-    fail_experiment "系统缺少 sha256sum" 3
-fi
 if [[ ! -f "${PROJECT_DIR}/requirements.txt" \
-        || ! -f "${PROJECT_DIR}/invert.py" ]]; then
-    fail_experiment "项目文件不完整" 3
+        || ! -f "${PROJECT_DIR}/invert.py" \
+        || ! -f "${PROJECT_DIR}/experiment_configs/l24_airport_medical_suffix_v2_1_no_cgmr.json" ]]; then
+    fail_experiment "项目或 suffix v2.1 配置不完整" 3
 fi
 
 REQUIREMENTS_HASH="$(sha256sum "${PROJECT_DIR}/requirements.txt" \
@@ -250,7 +253,7 @@ printf '[%s] physical_gpu=%s\n' "$(date '+%F %T')" "${GPU_ID}" \
 
 ENV_READY=0
 if [[ -x "${ENV_PYTHON}" ]]; then
-    if "${ENV_PYTHON}" "${SCRIPT_DIR}/runner.py" check-env \
+    if "${ENV_PYTHON}" "${SCRIPT_DIR}/runner_suffix_v2_1.py" check-env \
             --project "${PROJECT_DIR}" >>"${LOG_FILE}" 2>&1; then
         ENV_READY=1
     fi
@@ -290,7 +293,7 @@ if (( ENV_READY == 0 )); then
     fi
 fi
 
-if ! "${ENV_PYTHON}" "${SCRIPT_DIR}/runner.py" check-env \
+if ! "${ENV_PYTHON}" "${SCRIPT_DIR}/runner_suffix_v2_1.py" check-env \
         --project "${PROJECT_DIR}" >>"${LOG_FILE}" 2>&1; then
     fail_experiment "环境版本校验失败" 6
 fi
@@ -304,7 +307,7 @@ if ! "${ENV_PYTHON}" -c \
 fi
 show_progress 35
 
-CONDA_BASE="$("${CONDA_EXE}" info --base 2>>"${LOG_FILE}")"
+CONDA_BASE="$(${CONDA_EXE} info --base 2>>"${LOG_FILE}")"
 if [[ ! -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]]; then
     fail_experiment "Conda 激活脚本缺失" 7
 fi
@@ -332,7 +335,7 @@ RUNNER_ARGS=(
 if [[ "${DEML_SMOKE_TEST:-0}" == "1" ]]; then
     RUNNER_ARGS+=(--smoke-test)
 fi
-"${ENV_PYTHON}" "${SCRIPT_DIR}/runner.py" "${RUNNER_ARGS[@]}"
+"${ENV_PYTHON}" "${SCRIPT_DIR}/runner_suffix_v2_1.py" "${RUNNER_ARGS[@]}"
 RUNNER_STATUS="$?"
 
 case "${RUNNER_STATUS}" in

@@ -1,3 +1,4 @@
+import copy
 import io
 import unittest
 
@@ -57,6 +58,85 @@ def make_record(
 
 
 class ExperimentLogSummaryTests(unittest.TestCase):
+    def test_v21_external_evaluation_fills_stage_accuracy_without_formal_mutation(self):
+        formal_result = {
+            "version": "v2.1",
+            "pre_acc": None,
+            "post_acc": None,
+            "final_accuracy": None,
+            "diagnostics": {},
+            "diagnostics_failed": False,
+            "accepted": True,
+            "rollback": False,
+        }
+        frozen_formal_result = copy.deepcopy(formal_result)
+        record = {
+            "dataset": {
+                "name": "airport",
+                "sample_number": 1,
+                "sample_count": 1,
+            },
+            "selected_advanced_method": "suffix_reoptimization_v2.1",
+            "selected_candidate_reranking_method": "none",
+            "accuracy": 0.75,
+            "suffix_reoptimization_v2_1_result": formal_result,
+            "suffix_reoptimization_result": formal_result,
+            "advanced_method": {
+                "name": "suffix_reoptimization_v2.1",
+                "pre_acc": 0.5,
+                "post_acc": 0.75,
+            },
+            "candidate_reranking_result": {},
+        }
+
+        record["stage_accuracy"] = build_stage_accuracy(record)
+        self.assertEqual(
+            {"pre_suffix": 0.5, "suffix_v2_1": 0.75},
+            record["stage_accuracy"],
+        )
+        output = io.StringIO()
+        write_experiment_sample_summary(output, record, 1, 1, 20)
+
+        self.assertEqual(
+            output.getvalue(),
+            "===== dataset airport sample 1/1 =====\n"
+            "  dataset: airport\n"
+            "  dataset_sample: 1/1\n"
+            "  global_sample: 1/1\n"
+            "  token_length: 20\n"
+            "  selected_method: suffix_reoptimization_v2.1\n"
+            "  pre_suffix_accuracy: 0.500000\n"
+            "  suffix_v2_1_accuracy: 0.750000\n",
+        )
+        self.assertEqual(frozen_formal_result, formal_result)
+
+    def test_v21_log_keeps_the_existing_compact_accuracy_summary(self):
+        record = make_record(
+            advanced_method="suffix_reoptimization_v2.1",
+            accuracy=0.75,
+            baseline_accuracy=None,
+            suffix_accuracy=0.75,
+        )
+        record["suffix_reoptimization_result"].update({
+            "diagnostics": {"per_position_accuracy": [1.0, 0.5]},
+            "events": [{"position": 2, "vector_repair_attempted": True}],
+        })
+        output = io.StringIO()
+
+        write_experiment_sample_summary(output, record, 1, 1, 20)
+
+        self.assertEqual(
+            output.getvalue(),
+            "===== dataset airport sample 1/5 =====\n"
+            "  dataset: airport\n"
+            "  dataset_sample: 1/5\n"
+            "  global_sample: 1/1\n"
+            "  token_length: 20\n"
+            "  selected_method: suffix_reoptimization_v2.1\n"
+            "  pre_suffix_accuracy: none\n"
+            "  suffix_v2_1_accuracy: 0.750000\n",
+        )
+
     def test_suffix_and_cgmr_sample_has_dataset_and_stage_summary(self):
         record = make_record(
             advanced_method="suffix_reoptimization_v1.2",

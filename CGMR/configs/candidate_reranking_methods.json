@@ -1,5 +1,8 @@
 {
-  "cgmr_version": "v1.2",
+  "cgmr_version": "none",
+  "cgmr_v1_0": false,
+  "cgmr_v1_1": false,
+  "cgmr_v1_2": false,
   "include_configs": [
     "CGMR_v1_0.json",
     "CGMR_v1_1.json",

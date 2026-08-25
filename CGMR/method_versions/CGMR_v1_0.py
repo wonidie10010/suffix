@@ -110,7 +110,9 @@ def _register_exact_layer_hooks(model, layer_ids, destination):
     return handles
 
 
-def collect_hidden_states_by_layer(model, layer_ids, input_ids=None, attention_mask=None):
+def collect_hidden_states_by_layer(
+        model, layer_ids, input_ids=None, attention_mask=None,
+        use_cache=None):
     if input_ids is None:
         raise ValueError("input_ids are required to collect CGMR target hidden states")
     collected = {}
@@ -120,6 +122,8 @@ def collect_hidden_states_by_layer(model, layer_ids, input_ids=None, attention_m
             inputs = {"input_ids": input_ids}
             if attention_mask is not None:
                 inputs["attention_mask"] = attention_mask
+            if use_cache is not None:
+                inputs["use_cache"] = bool(use_cache)
             model(**inputs)
     finally:
         for handle in handles:

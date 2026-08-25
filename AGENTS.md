@@ -4,28 +4,36 @@
 
 ## 更新文档写作约定
 
-当用户要求写“更新文档”“改动说明”“版本更新”“实验更新 Word”“方法更新说明”“vX 相对 vY 的改动”等文档时，必须按本节执行。
+### Suffix 方法
 
-1. 先根据方法读取对应模板，并按其中的固定结构组织内容：
-   - suffix 方法：`suffix_optimization_methods/更新/更新文档写作模板.md`
-   - CGMR 方法：`CGMR/更新/更新文档写作模板.md`
-2. 涉及实验结果时，必须从真实 artifact 核对数据，优先检查：
+当用户要求为 suffix 方法写“更新文档”“改动说明”“版本更新”“实验更新 Word”“方法更新说明”或“vX 相对 vY 的改动”时，必须先完整读取并执行：
+
+- `suffix_optimization_methods/更新/更新文档写作模板.md`
+- `suffix_optimization_methods/更新/更新文档数据核对清单.md`
+
+这两个文件分别是 suffix 更新文档结构与实验数据核对的单一事实来源，本文件不重复其细则。
+
+### CGMR 方法及无独立模板的方法
+
+CGMR 的独立提示词文件已移除。为 CGMR 或其他没有独立模板的方法撰写更新文档时，按以下规则执行：
+
+1. 涉及实验结果时，必须从真实 artifact 核对数据，优先检查：
    - `results/invert_timestamp_runs/<method_version>/<timestamp>/resolved_config.json`
    - `results/invert_timestamp_runs/<method_version>/<timestamp>/experiment.log`
    - `results/invert_timestamp_runs/<method_version>/<timestamp>/reconstructions.jsonl`
-3. 涉及方法、损失函数、配置或流程时，必须从当前代码和 config 核对事实，不要只根据文件名或历史印象推断。
-4. 文档中要明确区分：
+2. 涉及方法、损失函数、配置或流程时，必须从当前代码和 config 核对事实，不要只根据文件名或历史印象推断。
+3. 文档中要明确区分：
    - 参考分析或用户草稿中的观点
    - 当前代码中已确认的真实实现
    - 基于实验 artifact 得到的结果
-5. 对不确定点必须写明“经代码确认”“尚需验证”或“参考分析推测”，不能把推测写成事实。
-6. Word 文档的内容顺序固定为：
+4. 对不确定点必须写明“经代码确认”“尚需验证”或“参考分析推测”，不能把推测写成事实。
+5. Word 文档的内容顺序固定为：
    - 发现了什么问题
    - 做了哪些改动
    - 为什么要做这些改动
    - 改动后的实验效果
    - 后续改进方向
-7. 如果生成 `.docx`，应按 documents skill 做结构检查；若本机有 LibreOffice/`soffice`，再做渲染 QA。若无法渲染，最终说明中必须注明只完成结构 QA。
+6. 如果生成 `.docx`，应按 documents skill 做结构检查；若本机有 LibreOffice/`soffice`，再做渲染 QA。若无法渲染，最终说明中必须注明只完成结构 QA。
 
 ## DEML artifact 口径
 
@@ -55,17 +63,7 @@
 
 ## Suffix 方法版本升级流程
 
-当用户要求修改 suffix 方法、推出新版本、相对旧版本升级或保留可回退实现时，必须按本节执行。
-
-1. 不直接覆盖当前最高版本；先在 `suffix_optimization_methods/method_versions/` 中新建下一版本完整 sidecar 文件，例如 `suffix_v1_5_0.py`。v1.2.3 及后续新版本由 sidecar 自己运行 Stage 1 初始重构与 Stage 2 suffix reoptimization。
-2. 旧版本文件必须保留，除非用户明确要求删除；旧版本应继续可以被 config 选择和运行。
-3. 每个新结构 suffix 版本必须有独立 config 文件，例如 `suffix_optimization_methods/configs/suffix_v1_5_0.json`，参数命名使用版本前缀 `suffix_v1_5_0_*`；v1.0–v1.2.2、v1.3–v1.4.1 的旧文件名和实现路径保持不变。
-4. 版本切换必须通过显式 selector 或等价 config 机制完成；当前约定是 `suffix_optimization_methods/configs/advanced_methods.json` 中的 `suffix_version`。
-5. `invert.py` 只做轻量 orchestration：import、config dataclass 初始化、版本选择、run 分支和结果落盘；复杂方法逻辑放在 sidecar 文件中。
-6. `experiment_outputs.py` 必须同步更新，使新版本参数写入 `resolved_config.json`；方法细节和新增结果字段写入 `reconstructions.jsonl`，固定的 `experiment.log` 摘要保持不变。
-7. 新版本必须补最小可运行测试，优先测试新增纯函数逻辑和版本选择逻辑。
-8. 实现后必须按更新文档模板在 `suffix_optimization_methods/更新/` 下写版本更新报告；若没有完成完整实验，报告的实验效果部分必须写明“尚需完整实验验证”。
-9. 更详细步骤参见 `suffix_optimization_methods/更新/方法版本升级流程.md`。
+当用户要求修改 suffix 方法、推出新版本、相对旧版本升级或保留可回退实现时，必须先完整读取并严格执行 `suffix_optimization_methods/更新/方法版本升级流程.md`。该文件是 suffix 版本隔离、配置与 selector、主流程接入、输出、测试和更新报告要求的单一事实来源；本文件只负责触发，不重复具体步骤。
 
 ## CGMR 方法版本升级流程
 
@@ -79,4 +77,4 @@
 6. `invert.py` 只做 import、config 初始化、版本选择、调用和结果落盘；候选构建、多层评分、置信门控和接受逻辑放在 sidecar 中。
 7. `experiment_outputs.py` 必须同步记录 selector 和版本配置；方法细节和新增结果字段写入 `reconstructions.jsonl`，固定的 `experiment.log` 摘要保持不变。
 8. 新版本必须补最小可运行测试；实验与验证可以按用户指令延后，但不得把未验证结果写成已确认事实。
-9. 更新 Word 写入 `CGMR/更新/`；详细步骤参见 `CGMR/更新/方法版本升级流程.md`。
+9. 更新 Word 写入 `CGMR/更新/`。

@@ -142,6 +142,25 @@ def _fixture(*, custom_fixed=False):
     return model, embed_layer, tokens, entry, mask, targets
 
 
+def _half_fixture():
+    model = _ToyModel().half()
+    embed_layer = model.model.embed_tokens
+    tokens = [0, 3, 4, 1]
+    token_tensor = torch.tensor([tokens], dtype=torch.long)
+    entry = embed_layer(token_tensor).detach().clone()
+    mask = torch.tensor([[1, 1, 1, 0]], dtype=torch.long)
+    collected = v21._forward_hidden(
+        model,
+        [0, 1, 2],
+        mask,
+        inputs_embeds=entry,
+        inference=True,
+    )
+    targets = {key: value.detach().clone() for key, value in collected.items()}
+    model.forward_use_cache.clear()
+    return model, embed_layer, tokens, entry, mask, targets
+
+
 def _run_fixture(config=None, total_input_ids=None, custom_fixed=False):
     model, embed_layer, tokens, entry, mask, targets = _fixture(
         custom_fixed=custom_fixed
@@ -445,6 +464,79 @@ class OptimizationAndCausalFlowTests(unittest.TestCase):
         self.assertEqual(1, constructor.call_count)
         self.assertEqual(3, summary["anchor_refresh_count"])
         self.assertFalse(summary["anchor_refresh_recreated_optimizer"])
+
+    def test_half_precision_global_optimizer_uses_float32_adam_state(self):
+        model, embed_layer, _, entry, mask, targets = _half_fixture()
+        legal = v21._LegalVocabulary(embed_layer, _Tokenizer(), True, 4)
+        captured_parameters = []
+        real_adam = torch.optim.Adam
+
+        def construct_adam(parameters, *args, **kwargs):
+            parameters = list(parameters)
+            captured_parameters.extend(parameters)
+            return real_adam(parameters, *args, **kwargs)
+
+        with mock.patch.object(
+                v21.torch.optim,
+                "Adam",
+                side_effect=construct_adam,
+        ):
+            updated, _ = v21._global_optimize(
+                model,
+                entry,
+                targets,
+                mask,
+                [1, 2],
+                [0, 1, 2],
+                [4.0 / 7.0, 2.0 / 7.0, 1.0 / 7.0],
+                legal,
+                _config(global_steps=1, vocab_weight=0.0),
+            )
+
+        self.assertEqual([torch.float32], [
+            parameter.dtype for parameter in captured_parameters
+        ])
+        self.assertEqual(torch.float16, updated.dtype)
+        self.assertTrue(torch.isfinite(updated).all())
+
+    def test_half_precision_vector_repair_uses_float32_adam_state(self):
+        model, embed_layer, tokens, work, mask, targets = _half_fixture()
+        legal = v21._LegalVocabulary(embed_layer, _Tokenizer(), True, 4)
+        captured_parameters = []
+        real_adam = torch.optim.Adam
+
+        def construct_adam(parameters, *args, **kwargs):
+            parameters = list(parameters)
+            captured_parameters.extend(parameters)
+            return real_adam(parameters, *args, **kwargs)
+
+        with mock.patch.object(
+                v21.torch.optim,
+                "Adam",
+                side_effect=construct_adam,
+        ):
+            updated, record = v21._try_vector_repair(
+                model,
+                work,
+                tokens,
+                [],
+                1,
+                embed_layer,
+                targets,
+                mask,
+                [0, 1, 2],
+                [4.0 / 7.0, 2.0 / 7.0, 1.0 / 7.0],
+                legal,
+                _config(local_steps=1, vocab_weight=0.0),
+                (0.0, 0.0, 1.0),
+            )
+
+        self.assertEqual([torch.float32], [
+            parameter.dtype for parameter in captured_parameters
+        ])
+        self.assertTrue(record["trial_safe"])
+        self.assertEqual(torch.float16, updated.dtype)
+        self.assertTrue(torch.isfinite(updated).all())
 
     def test_mixed_context_uses_only_committed_effective_prefix(self):
         model, embed_layer, tokens, work, _, _ = _fixture(custom_fixed=True)

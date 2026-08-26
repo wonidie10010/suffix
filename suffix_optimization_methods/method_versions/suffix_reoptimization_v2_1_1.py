@@ -596,11 +596,12 @@ def _global_optimize(
         model, entry_embedding, targets, attention_mask, positions, layers,
         weights, legal_vocab, config):
     base = entry_embedding.detach().clone()
+    optimizer_base = base.to(dtype=torch.float32)
     position_index = torch.tensor(
         positions, dtype=torch.long, device=base.device
     )
     trainable = torch.nn.Parameter(
-        base.index_select(1, position_index).detach().clone()
+        optimizer_base.index_select(1, position_index).detach().clone()
     )
     optimizer = torch.optim.Adam(
         [trainable],
@@ -617,7 +618,9 @@ def _global_optimize(
         if anchors is None or step % int(config.vocab_anchor_refresh_interval) == 0:
             anchors = _anchor_cache(trainable, legal_vocab, config)
             anchor_refresh_count += 1
-        full = _assemble_full_embedding(base, positions, trainable)
+        full = _assemble_full_embedding(
+            optimizer_base, positions, trainable
+        ).to(dtype=base.dtype)
         collected = _forward_hidden(
             model,
             layers,
@@ -659,7 +662,9 @@ def _global_optimize(
         if history_start is None:
             history_start = record
         history_end = record
-    work = _assemble_full_embedding(base, positions, trainable).detach()
+    work = _assemble_full_embedding(
+        optimizer_base, positions, trainable
+    ).detach().to(dtype=base.dtype)
     for position in range(int(base.shape[1])):
         if position not in positions and not torch.equal(
                 work[:, position], base[:, position]):
@@ -740,7 +745,7 @@ def _try_vector_repair(
         embed_layer, targets, attention_mask, layers, weights, legal_vocab,
         config, old_metrics):
     variable = torch.nn.Parameter(
-        work[:, position, :].detach().clone()
+        work[:, position, :].detach().clone().to(dtype=torch.float32)
     )
     optimizer = torch.optim.Adam(
         [variable],
@@ -772,7 +777,9 @@ def _try_vector_repair(
                 committed_positions,
                 embed_layer,
                 current_position=position,
-                current_embedding=variable,
+                current_embedding=variable.to(
+                    device=work.device, dtype=work.dtype
+                ),
             )
             collected = _forward_hidden(
                 model,
@@ -819,7 +826,9 @@ def _try_vector_repair(
             committed_positions,
             embed_layer,
             current_position=position,
-            current_embedding=variable.detach(),
+            current_embedding=variable.detach().to(
+                device=work.device, dtype=work.dtype
+            ),
         )
         new_metrics = _continuous_metrics(
             model,
@@ -871,7 +880,11 @@ def _try_vector_repair(
     if accepted:
         index = torch.tensor([position], dtype=torch.long, device=work.device)
         updated = work.index_copy(
-            1, index, variable.detach().reshape(1, 1, -1)
+            1,
+            index,
+            variable.detach().to(
+                device=work.device, dtype=work.dtype
+            ).reshape(1, 1, -1),
         ).detach()
     return updated, {
         "triggered": True,

@@ -223,6 +223,67 @@ def _resolved_suffix_v21_config(args):
     return resolved
 
 
+def _resolved_suffix_v211_config(args):
+    defaults = {
+        "enabled": False,
+        "log_enabled": True,
+        "layer_offsets": [0, 1, 2],
+        "layer_weights": [1.0, 0.5, 0.25],
+        "alpha_dir": 0.5,
+        "alpha_mag": 0.5,
+        "vocab_weight": 0.005,
+        "vocab_temperature": 0.01,
+        "vocab_anchor_top_k": 10,
+        "vocab_anchor_refresh_interval": 10,
+        "global_optimizer": "adam",
+        "global_steps": 1000,
+        "global_lr": 0.001,
+        "local_optimizer": "adam",
+        "local_steps": 50,
+        "local_lr": 0.001,
+        "adam_beta1": 0.9,
+        "adam_beta2": 0.999,
+        "adam_epsilon": 1e-8,
+        "weight_decay_enabled": False,
+        "scheduler_mode": "none",
+        "tau_J": 0.15,
+        "delta_c_max": 0.01,
+        "tau_r": 0.05,
+        "embedding_top_k_normal": 10,
+        "embedding_top_k_expanded": 20,
+        "ppl_top_k": 10,
+        "vocab_distance_mode": "mean_squared_l2",
+        "vocab_softmin_mode": "normalized_stable_logsumexp",
+        "candidate_tie_break_mode": "hidden_error_token_id",
+        "hidden_epsilon": 1e-8,
+        "epsilon_J": 1e-8,
+        "epsilon_d": 1e-8,
+        "accuracy_diagnostics_enabled": False,
+        "filter_nonascii": True,
+    }
+    prefixes = {
+        "enabled": "suffix_reoptimization_v2_1_1",
+        "log_enabled": "suffix_reoptimization_v2_1_1_log",
+    }
+    resolved = {
+        key: getattr(args, prefixes.get(key, "suffix_v2_1_1_" + key), default)
+        for key, default in defaults.items()
+    }
+    resolved.update({
+        "version": "v2.1.1",
+        "method": "suffix_reoptimization_v2.1.1",
+        "model_contract": "Qwen2/Qwen2.5 causal LM",
+        "use_cache": False,
+        "loss_metric": "direction_magnitude_joint_error_float32",
+        "final_acceptance": "hard_failure_only_rollback",
+        "formal_diagnostics_isolation": True,
+        "entry_pipeline": "legacy_stage1_then_v2_1_global_causal",
+        "legacy_stage1_enabled": True,
+        "legacy_stage1_epoch_source": "optimization.epoch",
+    })
+    return resolved
+
+
 def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
                           reconstruction_path, summary_excel_path,
                           total_samples, model_config_layers, model_type,
@@ -310,6 +371,7 @@ def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
             ),
         },
         "advanced_methods": {
+            "suffix_reoptimization_v2_1_1": _resolved_suffix_v211_config(args),
             "suffix_reoptimization_v2_1": _resolved_suffix_v21_config(args),
             "suffix_reoptimization_v2_0": _resolved_suffix_v20_config(args),
             "suffix_reoptimization_v1_4_1": {
@@ -1014,6 +1076,7 @@ def _format_accuracy_pair(before, after):
 def _suffix_result(record):
     return (
         record.get("suffix_reoptimization_result")
+        or record.get("suffix_reoptimization_v2_1_1_result")
         or record.get("suffix_reoptimization_v2_1_result")
         or record.get("suffix_reoptimization_v2_0_result")
         or record.get("suffix_v1_2_3_result")
@@ -1176,7 +1239,10 @@ def extract_experiment_stage_summary(record):
         suffix_accuracy = _excel_float(
             suffix_result.get("post_acc", suffix_result.get("final_accuracy"))
         )
-        if selected_advanced_method == "suffix_reoptimization_v2.1":
+        if selected_advanced_method in (
+            "suffix_reoptimization_v2.1",
+            "suffix_reoptimization_v2.1.1",
+        ):
             experiment_view = record.get("advanced_method") or {}
             if baseline_accuracy is None:
                 baseline_accuracy = _excel_float(

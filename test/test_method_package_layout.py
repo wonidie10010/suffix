@@ -148,8 +148,9 @@ class MethodPackageLayoutTests(unittest.TestCase):
     def test_advanced_config_merges_versioned_suffix_configs(self):
         merged = load_config(ADVANCED_CONFIG)
 
-        self.assertEqual("v2.1", merged["suffix_version"])
+        self.assertEqual("v2.1.1", merged["suffix_version"])
         self.assertTrue(merged["suffix_reoptimization_v2_1"])
+        self.assertTrue(merged["suffix_reoptimization_v2_1_1"])
         self.assertEqual("none", merged["cgmr_version"])
         self.assertFalse(merged["cgmr_v1_0"])
         self.assertFalse(merged["cgmr_v1_1"])
@@ -167,6 +168,7 @@ class MethodPackageLayoutTests(unittest.TestCase):
             "v1_4_1",
             "v2_0",
             "v2_1",
+            "v2_1_1",
         ):
             self.assertIn("suffix_reoptimization_{}".format(version), merged)
         self.assertIn("suffix_v1_2_3", merged)

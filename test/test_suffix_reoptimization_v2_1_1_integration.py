@@ -9,7 +9,7 @@ import torch
 
 import invert
 from experiment_outputs import (
-    _resolved_suffix_v21_config,
+    _resolved_suffix_v211_config,
     _suffix_result,
     build_resolved_config,
 )
@@ -17,7 +17,7 @@ from suffix_optimization_methods.method_versions import (
     suffix_reoptimization_v2_0 as v20,
 )
 from suffix_optimization_methods.method_versions import (
-    suffix_reoptimization_v2_1 as v21,
+    suffix_reoptimization_v2_1_1 as v21,
 )
 
 
@@ -43,34 +43,34 @@ def _disabled():
 class SelectorAndCompatibilityTests(unittest.TestCase):
     def test_v21_aliases_and_strict_disabled_failure(self):
         for alias in (
-            "2.1",
-            "v2.1",
-            "suffix_v2_1",
-            "suffix_reoptimization_v2.1",
-            "suffix_reoptimization_v2_1",
+            "2.1.1",
+            "v2.1.1",
+            "suffix_v2_1_1",
+            "suffix_reoptimization_v2.1.1",
+            "suffix_reoptimization_v2_1_1",
         ):
-            self.assertEqual("v2.1", invert.normalize_suffix_version(alias))
+            self.assertEqual("v2.1.1", invert.normalize_suffix_version(alias))
 
         selected = invert.select_advanced_method(
-            "v2.1",
+            "v2.1.1",
             _disabled(),
             _disabled(),
             _disabled(),
             _disabled(),
-            suffix_reopt_v2_1_config=(
-                v21.SuffixReoptimizationV21Config(enabled=True)
+            suffix_reopt_v2_1_1_config=(
+                v21.SuffixReoptimizationV211Config(enabled=True)
             ),
         )
         self.assertEqual(v21.METHOD_NAME, selected)
-        with self.assertRaisesRegex(ValueError, "v2.1.*disabled"):
+        with self.assertRaisesRegex(ValueError, "v2.1.1.*disabled"):
             invert.select_advanced_method(
-                "v2.1",
+                "v2.1.1",
                 _disabled(),
                 _disabled(),
                 _disabled(),
                 _disabled(),
-                suffix_reopt_v2_1_config=(
-                    v21.SuffixReoptimizationV21Config(enabled=False)
+                suffix_reopt_v2_1_1_config=(
+                    v21.SuffixReoptimizationV211Config(enabled=False)
                 ),
             )
 
@@ -84,8 +84,8 @@ class SelectorAndCompatibilityTests(unittest.TestCase):
             suffix_reopt_v2_0_config=(
                 v20.SuffixReoptimizationV20Config(enabled=True)
             ),
-            suffix_reopt_v2_1_config=(
-                v21.SuffixReoptimizationV21Config(enabled=True)
+            suffix_reopt_v2_1_1_config=(
+                v21.SuffixReoptimizationV211Config(enabled=True)
             ),
         )
         self.assertEqual(v20.METHOD_NAME, selected)
@@ -105,7 +105,7 @@ class SelectorAndCompatibilityTests(unittest.TestCase):
         )
         for candidate_method in ("CGMR_v1.0", "CGMR_v1.1", "CGMR_v1.2"):
             with self.subTest(candidate_method=candidate_method):
-                with self.assertRaisesRegex(ValueError, "v2.1.*CGMR"):
+                with self.assertRaisesRegex(ValueError, "v2.1.1.*CGMR"):
                     invert.validate_advanced_candidate_combination(
                         v21.METHOD_NAME,
                         candidate_method,
@@ -158,7 +158,7 @@ class SelectorAndCompatibilityTests(unittest.TestCase):
             self.assertEqual([[0, 5, 6]], prefixed_ids.tolist())
             self.assertEqual([[1, 1, 1]], prefixed_mask.tolist())
 
-    def test_combined_defaults_select_v211_without_cgmr(self):
+    def test_combined_defaults_select_v21_without_cgmr(self):
         advanced = invert.load_config(ADVANCED_CONFIG)
         candidate = invert.load_config(CANDIDATE_CONFIG)
         self.assertEqual("v2.1.1", advanced["suffix_version"])
@@ -168,11 +168,27 @@ class SelectorAndCompatibilityTests(unittest.TestCase):
         self.assertFalse(candidate["cgmr_v1_1"])
         self.assertFalse(candidate["cgmr_v1_2"])
 
+    def test_v211_keeps_legacy_stage1_in_front_of_sidecar(self):
+        source = inspect.getsource(invert.main)
+        start = source.index("use_external_stage1 =")
+        end = source.index("part_epoch =", start)
+        stage1_selector_block = source[start:end]
+        self.assertIn('"suffix_reoptimization_v2.1"', stage1_selector_block)
+        self.assertNotIn('"suffix_reoptimization_v2.1.1"', stage1_selector_block)
+        self.assertIn(
+            'part_epoch = 0 if use_external_stage1 else total_epoch',
+            source,
+        )
+        self.assertIn(
+            '"legacy_stage1_then_v2_1_global_causal"',
+            source,
+        )
+
 
 class FormalResultAndOutputTests(unittest.TestCase):
     def test_experiment_evaluation_does_not_mutate_frozen_v21_result(self):
         formal_result = {
-            "version": "v2.1",
+            "version": "v2.1.1",
             "final_tokens": [0, 2, 4],
             "final_accuracy": None,
             "pre_acc": None,
@@ -197,7 +213,7 @@ class FormalResultAndOutputTests(unittest.TestCase):
         self.assertEqual(
             2,
             invert.experiment_exit_code_for_records([{
-                "suffix_reoptimization_v2_1_result": {
+                "suffix_reoptimization_v2_1_1_result": {
                     "fatal_failure": True,
                 },
             }]),
@@ -214,11 +230,11 @@ class FormalResultAndOutputTests(unittest.TestCase):
 
     def test_jsonl_wiring_keeps_v21_specific_and_canonical_results(self):
         source = inspect.getsource(invert.main)
-        self.assertIn('"suffix_reoptimization_v2_1_result"', source)
+        self.assertIn('"suffix_reoptimization_v2_1_1_result"', source)
         self.assertIn('"suffix_reoptimization_result"', source)
-        formal = {"version": "v2.1", "fatal_failure": False}
+        formal = {"version": "v2.1.1", "fatal_failure": False}
         record = {
-            "suffix_reoptimization_v2_1_result": formal,
+            "suffix_reoptimization_v2_1_1_result": formal,
             "suffix_reoptimization_result": formal,
         }
         self.assertIs(
@@ -257,7 +273,7 @@ class FormalResultAndOutputTests(unittest.TestCase):
         )
 
     def test_resolved_v21_defaults_match_frozen_config(self):
-        resolved = _resolved_suffix_v21_config(types.SimpleNamespace())
+        resolved = _resolved_suffix_v211_config(types.SimpleNamespace())
         self.assertFalse(resolved["enabled"])
         self.assertEqual([0, 1, 2], resolved["layer_offsets"])
         self.assertEqual([1.0, 0.5, 0.25], resolved["layer_weights"])
@@ -282,7 +298,7 @@ class FormalResultAndOutputTests(unittest.TestCase):
             ROOT,
             "suffix_optimization_methods",
             "configs",
-            "suffix_reoptimization_v2_1.json",
+            "suffix_reoptimization_v2_1_1.json",
         )
         with open(config_path, "r", encoding="utf-8") as handle:
             config_payload = json.load(handle)
@@ -292,8 +308,8 @@ class FormalResultAndOutputTests(unittest.TestCase):
             },
             {
                 resolved["vocab_softmin_mode"],
-                v21.SuffixReoptimizationV21Config().vocab_softmin_mode,
-                config_payload["suffix_v2_1_vocab_softmin_mode"],
+                v21.SuffixReoptimizationV211Config().vocab_softmin_mode,
+                config_payload["suffix_v2_1_1_vocab_softmin_mode"],
             },
         )
         self.assertFalse(resolved["use_cache"])
@@ -325,8 +341,8 @@ class FormalResultAndOutputTests(unittest.TestCase):
             "perplexity": True,
             "top_k_ppl": 10,
             "selected_advanced_method": v21.METHOD_NAME,
-            "suffix_version": "v2.1",
-            "suffix_reoptimization_v2_1": True,
+            "suffix_version": "v2.1.1",
+            "suffix_reoptimization_v2_1_1": True,
             "selected_candidate_reranking_method": "none",
             "cgmr_version": "none",
             "device_map": "auto",
@@ -348,13 +364,13 @@ class FormalResultAndOutputTests(unittest.TestCase):
             28,
         )
         self.assertEqual(
-            ["suffix_reoptimization_v2_1"],
+            ["suffix_reoptimization_v2_1_1"],
             list(resolved["advanced_methods"]),
         )
         self.assertEqual({}, resolved["candidate_reranking_methods"])
-        selected = resolved["advanced_methods"]["suffix_reoptimization_v2_1"]
+        selected = resolved["advanced_methods"]["suffix_reoptimization_v2_1_1"]
         self.assertTrue(selected["enabled"])
-        self.assertEqual("v2.1", selected["version"])
+        self.assertEqual("v2.1.1", selected["version"])
         self.assertFalse(selected["accuracy_diagnostics_enabled"])
 
 

@@ -77,7 +77,7 @@ def prepare_smoke_experiment(project_dir, runtime_dir):
         "suffix_v2_1_1_vocab_anchor_top_k": 1,
         "suffix_v2_1_1_vocab_anchor_refresh_interval": 1,
         "suffix_v2_1_1_embedding_top_k_normal": 1,
-        "suffix_v2_1_1_embedding_top_k_expanded": 1,
+        "suffix_v2_1_1_embedding_top_k_expanded": 2,
         "suffix_v2_1_1_ppl_top_k": 1,
         "suffix_v2_1_1_accuracy_diagnostics_enabled": False,
         "device_map": "single_gpu",

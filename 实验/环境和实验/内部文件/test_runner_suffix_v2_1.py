@@ -63,6 +63,12 @@ class RunnerSuffixV21Tests(unittest.TestCase):
         self.assertEqual(1, config["epoch"])
         self.assertEqual(1, config["suffix_v2_1_1_global_steps"])
         self.assertEqual(1, config["suffix_v2_1_1_local_steps"])
+        self.assertEqual(1, config["suffix_v2_1_1_embedding_top_k_normal"])
+        self.assertEqual(2, config["suffix_v2_1_1_embedding_top_k_expanded"])
+        self.assertGreater(
+            config["suffix_v2_1_1_embedding_top_k_expanded"],
+            config["suffix_v2_1_1_embedding_top_k_normal"],
+        )
         self.assertFalse(config["suffix_v2_1_1_accuracy_diagnostics_enabled"])
         self.assertEqual(smoke["run_root"], Path(config["log_dir"]))
 

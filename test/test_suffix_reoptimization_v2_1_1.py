@@ -29,6 +29,27 @@ class _Tokenizer:
         )
 
 
+class _PaddedTokenizer:
+    vocab_size = 5
+    all_special_ids = [0, 1, 6]
+    pad_token_id = 1
+
+    def __len__(self):
+        return 7
+
+    def decode(self, token_ids):
+        values = token_ids.tolist() if hasattr(token_ids, "tolist") else token_ids
+        return "".join(
+            "special" if int(value) == 6 else "t{}".format(int(value))
+            for value in values
+        )
+
+
+class _OverfullPaddedTokenizer(_PaddedTokenizer):
+    def __len__(self):
+        return 11
+
+
 class _ToyBlock(torch.nn.Module):
     def forward(self, hidden):
         return hidden + 0.1 * hidden.cumsum(dim=1)
@@ -44,17 +65,21 @@ class _ToyBody(torch.nn.Module):
 
 
 class _ToyModel(torch.nn.Module):
-    def __init__(self, *, model_type="qwen2", architecture="Qwen2ForCausalLM"):
+    def __init__(
+            self, *, model_type="qwen2", architecture="Qwen2ForCausalLM",
+            vocab_size=32):
         super().__init__()
         self.config = types.SimpleNamespace(
             model_type=model_type,
             architectures=[architecture],
         )
-        self.model = _ToyBody()
-        self.lm_head = torch.nn.Linear(4, 32, bias=False)
+        self.model = _ToyBody(vocab_size=vocab_size)
+        self.lm_head = torch.nn.Linear(4, vocab_size, bias=False)
         self.forward_use_cache = []
         with torch.no_grad():
-            values = torch.arange(128, dtype=torch.float32).reshape(32, 4)
+            values = torch.arange(
+                vocab_size * 4, dtype=torch.float32
+            ).reshape(vocab_size, 4)
             self.model.embed_tokens.weight.copy_(values / 40.0 - 1.5)
             self.lm_head.weight.copy_(values / 80.0 - 0.75)
 
@@ -145,6 +170,24 @@ def _run_fixture(config=None, total_input_ids=None, custom_fixed=False):
         final_embedding,
         result,
     )
+
+
+def _padded_preflight_fixture(logits_vocab_size=10):
+    model = _ToyModel(vocab_size=10)
+    if logits_vocab_size != 10:
+        model.lm_head = torch.nn.Linear(4, logits_vocab_size, bias=False)
+    embed_layer = model.model.embed_tokens
+    tokens = [0, 3, 4, 1]
+    entry = embed_layer(torch.tensor([tokens], dtype=torch.long)).detach()
+    mask = torch.tensor([[1, 1, 1, 0]], dtype=torch.long)
+    targets = v21._forward_hidden(
+        model,
+        [0, 1, 2],
+        mask,
+        inputs_embeds=entry,
+        inference=True,
+    )
+    return model, embed_layer, tokens, entry, mask, targets
 
 
 class ConfigAndPureFunctionTests(unittest.TestCase):
@@ -241,6 +284,75 @@ class ConfigAndPureFunctionTests(unittest.TestCase):
 
 
 class LegalVocabularyTests(unittest.TestCase):
+    def test_padded_model_vocab_separates_tokenizer_ids_and_logits_width(self):
+        (
+            model,
+            embed_layer,
+            tokens,
+            entry,
+            mask,
+            targets,
+        ) = _padded_preflight_fixture()
+        state = v21._preflight(
+            model,
+            embed_layer,
+            entry,
+            tokens,
+            targets,
+            mask,
+            0,
+            3,
+            _PaddedTokenizer(),
+            _config(),
+            1,
+        )
+        legal = state["legal_vocab"]
+
+        self.assertEqual(7, legal.tokenizer_vocab_size)
+        self.assertEqual(10, legal.vocab_size)
+        self.assertIn(5, legal.ids)
+        self.assertNotIn(6, legal.ids)
+        self.assertTrue(all(token_id < 7 for token_id in legal.ids))
+        self.assertFalse(legal.is_legal(7))
+        self.assertFalse(legal.is_legal(9))
+
+    def test_tokenizer_domain_cannot_exceed_model_embedding_domain(self):
+        with self.assertRaisesRegex(
+                v21.SuffixV211FatalError, "vocab_size_mismatch"):
+            v21._LegalVocabulary(
+                torch.nn.Embedding(10, 4),
+                _OverfullPaddedTokenizer(),
+                True,
+                chunk_size=4,
+            )
+
+    def test_logits_contract_still_uses_model_embedding_width(self):
+        (
+            model,
+            embed_layer,
+            tokens,
+            entry,
+            mask,
+            targets,
+        ) = _padded_preflight_fixture(logits_vocab_size=9)
+        with self.assertRaisesRegex(
+                v21.SuffixV211FatalError,
+                "causal_lm_logits_contract_failed",
+        ):
+            v21._preflight(
+                model,
+                embed_layer,
+                entry,
+                tokens,
+                targets,
+                mask,
+                0,
+                3,
+                _PaddedTokenizer(),
+                _config(),
+                1,
+            )
+
     def test_entry_snapshot_excludes_special_pad_nonascii_and_keeps_padding(self):
         model = _ToyModel()
         embed_layer = model.model.embed_tokens

@@ -290,18 +290,23 @@ def _joint_error(current_hidden, target_hidden, config):
 
 
 def _tokenizer_vocab_size(tokenizer, embed_layer):
-    tokenizer_size = getattr(tokenizer, "vocab_size", None)
+    """Return the tokenizer-defined token-id domain, not model logits width."""
     embedding_size = int(embed_layer.weight.shape[0])
-    if tokenizer_size is None:
-        return embedding_size
-    if int(tokenizer_size) != embedding_size:
+    tokenizer_size = getattr(tokenizer, "vocab_size", None)
+    try:
+        tokenizer_size = int(len(tokenizer))
+    except (AttributeError, TypeError):
+        if tokenizer_size is None:
+            return embedding_size
+        tokenizer_size = int(tokenizer_size)
+    if tokenizer_size <= 0 or tokenizer_size > embedding_size:
         raise SuffixV211FatalError("vocab_size_mismatch", "preflight")
-    return embedding_size
+    return tokenizer_size
 
 
-def _is_legal_token(token_id, tokenizer, vocab_size, filter_nonascii):
+def _is_legal_token(token_id, tokenizer, tokenizer_vocab_size, filter_nonascii):
     token_id = int(token_id)
-    if token_id < 0 or token_id >= int(vocab_size):
+    if token_id < 0 or token_id >= int(tokenizer_vocab_size):
         return False
     special_ids = {int(value) for value in getattr(tokenizer, "all_special_ids", [])}
     pad_token_id = getattr(tokenizer, "pad_token_id", None)
@@ -324,19 +329,28 @@ class _LegalVocabulary:
     def __init__(self, embed_layer, tokenizer, filter_nonascii, chunk_size):
         self.embed_layer = embed_layer
         self.tokenizer = tokenizer
-        self.vocab_size = _tokenizer_vocab_size(tokenizer, embed_layer)
+        self.vocab_size = int(embed_layer.weight.shape[0])
+        self.tokenizer_vocab_size = _tokenizer_vocab_size(
+            tokenizer, embed_layer
+        )
         self.filter_nonascii = bool(filter_nonascii)
         self.chunk_size = int(chunk_size)
         self.ids = tuple(
-            token_id for token_id in range(self.vocab_size)
+            token_id for token_id in range(self.tokenizer_vocab_size)
             if _is_legal_token(
-                token_id, tokenizer, self.vocab_size, self.filter_nonascii
+                token_id,
+                tokenizer,
+                self.tokenizer_vocab_size,
+                self.filter_nonascii,
             )
         )
 
     def is_legal(self, token_id):
         return _is_legal_token(
-            token_id, self.tokenizer, self.vocab_size, self.filter_nonascii
+            token_id,
+            self.tokenizer,
+            self.tokenizer_vocab_size,
+            self.filter_nonascii,
         )
 
     def nearest(self, embedding, top_k):

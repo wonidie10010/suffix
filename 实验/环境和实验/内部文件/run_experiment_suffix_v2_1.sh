@@ -42,7 +42,7 @@ release_runtime_lock() {
 
 finish_success() {
     release_runtime_lock
-    printf '\n结束 suffix v2.1 实验\n' >&2
+    printf '\n结束 suffix v2.1.1 实验\n' >&2
     exit 0
 }
 
@@ -56,7 +56,7 @@ fail_experiment() {
     fi
     release_runtime_lock
     printf '\n实验失败：%s（详见运行日志）\n' "${reason}" >&2
-    printf '结束 suffix v2.1 实验\n' >&2
+    printf '结束 suffix v2.1.1 实验\n' >&2
     exit "${exit_code}"
 }
 
@@ -120,7 +120,7 @@ acquire_runtime_lock() {
 
 trap 'fail_experiment "实验被中断" 130' INT TERM
 
-printf '开始 suffix v2.1 实验\n' >&2
+printf '开始 suffix v2.1.1 实验\n' >&2
 show_progress 0
 
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
@@ -136,7 +136,7 @@ acquire_runtime_lock
 
 RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 LOG_DIR="${RUNTIME_DIR}/logs"
-LOG_FILE="${LOG_DIR}/suffix_v2_1-${RUN_STAMP}.log"
+LOG_FILE="${LOG_DIR}/suffix_v2_1_1-${RUN_STAMP}.log"
 if ! mkdir -p "${LOG_DIR}" "${RUNTIME_DIR}/downloads" \
         "${RUNTIME_DIR}/envs" "${RUNTIME_DIR}/conda-pkgs" \
         "${RESULT_ROOT}" >/dev/null 2>&1; then
@@ -148,13 +148,13 @@ touch "${LOG_FILE}" >/dev/null 2>&1 || \
 {
     printf '[%s] bundle=%s\n' "$(date '+%F %T')" "${BUNDLE_DIR}"
     printf '[%s] project=%s\n' "$(date '+%F %T')" "${PROJECT_DIR}"
-    printf '[%s] method=suffix_reoptimization_v2.1\n' "$(date '+%F %T')"
+    printf '[%s] method=suffix_reoptimization_v2.1.1\n' "$(date '+%F %T')"
 } >>"${LOG_FILE}"
 
 if [[ ! -f "${PROJECT_DIR}/requirements.txt" \
         || ! -f "${PROJECT_DIR}/invert.py" \
-        || ! -f "${PROJECT_DIR}/experiment_configs/l24_airport_medical_suffix_v2_1_no_cgmr.json" ]]; then
-    fail_experiment "项目或 suffix v2.1 配置不完整" 3
+        || ! -f "${PROJECT_DIR}/experiment_configs/l24_airport_medical_suffix_v2_1_1_no_cgmr.json" ]]; then
+    fail_experiment "项目或 suffix v2.1.1 配置不完整" 3
 fi
 
 REQUIREMENTS_HASH="$(sha256sum "${PROJECT_DIR}/requirements.txt" \

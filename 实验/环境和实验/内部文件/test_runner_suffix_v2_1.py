@@ -13,10 +13,10 @@ import runner_suffix_v2_1 as runner
 class RunnerSuffixV21Tests(unittest.TestCase):
     def test_runner_targets_suffix_v2_1_only(self):
         self.assertEqual(
-            "experiment_configs/l24_airport_medical_suffix_v2_1_no_cgmr.json",
+            "experiment_configs/l24_airport_medical_suffix_v2_1_1_no_cgmr.json",
             runner.EXPERIMENT_CONFIG,
         )
-        self.assertEqual("suffix_reoptimization_v2.1", runner.METHOD_DIRECTORY)
+        self.assertEqual("suffix_reoptimization_v2.1.1", runner.METHOD_DIRECTORY)
         self.assertEqual(
             (
                 "resolved_config.json",
@@ -41,14 +41,14 @@ class RunnerSuffixV21Tests(unittest.TestCase):
             stream.getvalue(),
         )
 
-    def test_smoke_config_is_v21_and_short(self):
+    def test_smoke_config_is_v211_and_short(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
             project = root / "project"
             official_config = (
                 project
                 / "experiment_configs"
-                / "l24_airport_medical_suffix_v2_1_no_cgmr.json"
+                / "l24_airport_medical_suffix_v2_1_1_no_cgmr.json"
             )
             official_config.parent.mkdir(parents=True)
             official_config.write_text("{}", encoding="utf-8")
@@ -61,9 +61,9 @@ class RunnerSuffixV21Tests(unittest.TestCase):
         self.assertEqual([str(official_config.resolve())], config["include_configs"])
         self.assertEqual(1, config["dataset_len"])
         self.assertEqual(1, config["epoch"])
-        self.assertEqual(1, config["suffix_v2_1_global_steps"])
-        self.assertEqual(1, config["suffix_v2_1_local_steps"])
-        self.assertFalse(config["suffix_v2_1_accuracy_diagnostics_enabled"])
+        self.assertEqual(1, config["suffix_v2_1_1_global_steps"])
+        self.assertEqual(1, config["suffix_v2_1_1_local_steps"])
+        self.assertFalse(config["suffix_v2_1_1_accuracy_diagnostics_enabled"])
         self.assertEqual(smoke["run_root"], Path(config["log_dir"]))
 
     def test_experiment_launches_one_v21_process_without_parallel_flags(self):

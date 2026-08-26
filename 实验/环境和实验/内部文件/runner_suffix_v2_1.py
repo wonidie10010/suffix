@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""suffix v2.1 one-click bundle runner.
+"""suffix v2.1.1 one-click bundle runner.
 
 This runner is intentionally version-specific.  It reuses the repository
 source and the shared runtime prepared by the v2.0 bundle, but it only
-accepts the v2.1 experiment configuration and result directory.
+accepts the v2.1.1 experiment configuration and result directory.
 """
 
 import hashlib
@@ -22,9 +22,9 @@ import argparse
 
 MODEL_ID = "Qwen/Qwen2.5-1.5B"
 EXPERIMENT_CONFIG = (
-    "experiment_configs/l24_airport_medical_suffix_v2_1_no_cgmr.json"
+    "experiment_configs/l24_airport_medical_suffix_v2_1_1_no_cgmr.json"
 )
-METHOD_DIRECTORY = "suffix_reoptimization_v2.1"
+METHOD_DIRECTORY = "suffix_reoptimization_v2.1.1"
 REQUIRED_ARTIFACTS = (
     "resolved_config.json",
     "experiment.log",
@@ -39,20 +39,20 @@ EXIT_UNEXPECTED_FAILURE = 50
 
 def prepare_smoke_experiment(project_dir, runtime_dir):
     project_dir = Path(project_dir).resolve()
-    smoke_root = Path(runtime_dir).resolve() / "smoke-test-v2.1"
+    smoke_root = Path(runtime_dir).resolve() / "smoke-test-v2.1.1"
     run_root = smoke_root / "runs"
     copy_root = smoke_root / "smoke-copied-results"
     smoke_root.mkdir(parents=True, exist_ok=True)
     data_path = smoke_root / "smoke_data.json"
-    config_path = smoke_root / "suffix_v2_1_smoke.json"
+    config_path = smoke_root / "suffix_v2_1_1_smoke.json"
     official_config = (
         project_dir
         / "experiment_configs"
-        / "l24_airport_medical_suffix_v2_1_no_cgmr.json"
+        / "l24_airport_medical_suffix_v2_1_1_no_cgmr.json"
     )
     if not official_config.is_file():
         raise FileNotFoundError(
-            "official suffix v2.1 config is missing: {}".format(
+            "official suffix v2.1.1 config is missing: {}".format(
                 official_config
             )
         )
@@ -63,7 +63,7 @@ def prepare_smoke_experiment(project_dir, runtime_dir):
     config = {
         "include_configs": [str(official_config)],
         "datasets": [{
-            "name": "suffix_v2_1_smoke",
+            "name": "suffix_v2_1_1_smoke",
             "path": str(data_path),
             "type": "local",
             "len": 1,
@@ -72,17 +72,17 @@ def prepare_smoke_experiment(project_dir, runtime_dir):
         "dataset_type": "local",
         "dataset_len": 1,
         "epoch": 1,
-        "suffix_v2_1_global_steps": 1,
-        "suffix_v2_1_local_steps": 1,
-        "suffix_v2_1_vocab_anchor_top_k": 1,
-        "suffix_v2_1_vocab_anchor_refresh_interval": 1,
-        "suffix_v2_1_embedding_top_k_normal": 1,
-        "suffix_v2_1_embedding_top_k_expanded": 1,
-        "suffix_v2_1_ppl_top_k": 1,
-        "suffix_v2_1_accuracy_diagnostics_enabled": False,
+        "suffix_v2_1_1_global_steps": 1,
+        "suffix_v2_1_1_local_steps": 1,
+        "suffix_v2_1_1_vocab_anchor_top_k": 1,
+        "suffix_v2_1_1_vocab_anchor_refresh_interval": 1,
+        "suffix_v2_1_1_embedding_top_k_normal": 1,
+        "suffix_v2_1_1_embedding_top_k_expanded": 1,
+        "suffix_v2_1_1_ppl_top_k": 1,
+        "suffix_v2_1_1_accuracy_diagnostics_enabled": False,
         "device_map": "single_gpu",
         "log_dir": str(run_root),
-        "output_dir": "suffix_v2_1_one_click_smoke",
+        "output_dir": "suffix_v2_1_1_one_click_smoke",
     }
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
@@ -407,7 +407,7 @@ def run_bundle(args):
         experiment_config = smoke["config"]
         experiment_run_root = smoke["run_root"]
         copy_root = smoke["copy_root"]
-        append_log(args.log_file, "running explicit suffix v2.1 smoke test")
+        append_log(args.log_file, "running explicit suffix v2.1.1 smoke test")
 
     append_log(args.log_file, "checking/downloading model {}".format(MODEL_ID))
     model_status = run_with_heartbeat(

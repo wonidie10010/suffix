@@ -31,7 +31,14 @@
 - `suffix_optimization_methods/configs/advanced_methods.json`；
 - `experiment_configs/l24_airport_medical_suffix_v2_1_1_no_cgmr.json`；
 - `invert.py` 和 `experiment_outputs.py`；
-- `test/test_suffix_reoptimization_v2_1_1.py` 与对应 integration test。
+- `test/test_suffix_reoptimization_v2_1_1.py` 与对应 integration test；
+- 原文件名保留的 `实验/一键运行_suffix_v2_1.py`、
+  `实验/环境和实验/内部文件/run_experiment_suffix_v2_1.sh`、
+  `实验/环境和实验/内部文件/runner_suffix_v2_1.py` 及其测试和 README。
+
+一键链路没有新增并行入口：原 `suffix_v2_1` 文件名仍作为用户入口，但其内部
+配置、method 目录、smoke 配置、日志 provenance 和结果复制目标均已切换到
+v2.1.1；共享 runtime、共享锁、单卡约束、模型准备和三类必需 artifact 校验保持不变。
 
 组合默认 selector 已指向 v2.1.1；v2.1 仍可通过显式 `suffix_version=v2.1` 选择。v2.1.1 与 CGMR 继续保持互斥。
 
@@ -52,6 +59,7 @@
 | v2.1/v2.1.1 sidecar 与 integration focused tests | 73 项通过 | 新 sidecar 的 toy/mock/CPU 合同、selector、配置、输出 wiring 和旧 v2.1 回归通过 |
 | method package layout | 10 项通过 | 新版本配置合并与 package layout 通过 |
 | experiment log summary | 8 项通过 | 没有向固定 `experiment.log` 摘要增加方法明细 |
+| v2.1.1 一键入口与 runner 专项测试 | 17 项通过 | 原 v2.1 文件名链路可定位到 v2.1.1 配置、method 目录和 smoke 流程 |
 | 全量 unittest | 266 项通过 | 当前仓库静态/toy/mock/CPU 单元测试全绿 |
 | Python/JSON 静态检查 | 通过 | 相关源码可编译，三个新增/修改 JSON 可解析；直接 py_compile 的默认缓存目录受本机权限限制，已用不落盘 compile 校验 |
 

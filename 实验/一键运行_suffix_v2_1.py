@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""suffix v2.1 单卡正式实验的唯一顶层一键入口。
+"""suffix v2.1.1 单卡正式实验的唯一顶层一键入口。
 
-该入口调用 v2.1 专用 bootstrap。bootstrap 复用实验目录中的共享
-runtime/Conda 环境与模型缓存，但只启动 suffix v2.1 的单进程单卡实验。
+该入口保留原 v2.1 一键链路的文件名，并调用其 bootstrap；bootstrap
+复用实验目录中的共享 runtime/Conda 环境与模型缓存，但只启动
+suffix v2.1.1 的单进程单卡实验。
 """
 
 import argparse
@@ -23,7 +24,7 @@ PROJECT_DIR = EXPERIMENT_DIR.parent
 EXPERIMENT_CONFIG = (
     PROJECT_DIR
     / "experiment_configs"
-    / "l24_airport_medical_suffix_v2_1_no_cgmr.json"
+    / "l24_airport_medical_suffix_v2_1_1_no_cgmr.json"
 )
 
 
@@ -42,7 +43,7 @@ def validate_layout():
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="检查/安装共享环境并运行唯一的 suffix v2.1 单卡实验"
+        description="检查/安装共享环境并运行唯一的 suffix v2.1.1 单卡实验"
     )
     parser.add_argument(
         "--smoke-test",

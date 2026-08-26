@@ -22,7 +22,7 @@ class OneClickSuffixV21Tests(unittest.TestCase):
         )
         self.assertEqual("runner_suffix_v2_1.py", launcher.SINGLE_GPU_RUNNER.name)
         self.assertEqual(
-            "l24_airport_medical_suffix_v2_1_no_cgmr.json",
+            "l24_airport_medical_suffix_v2_1_1_no_cgmr.json",
             launcher.EXPERIMENT_CONFIG.name,
         )
 
@@ -72,8 +72,10 @@ class OneClickSuffixV21Tests(unittest.TestCase):
         source = (HERE / "run_experiment_suffix_v2_1.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("suffix_reoptimization_v2.1", source)
-        self.assertIn("l24_airport_medical_suffix_v2_1_no_cgmr.json", source)
+        self.assertIn("suffix_reoptimization_v2.1.1", source)
+        self.assertIn(
+            "l24_airport_medical_suffix_v2_1_1_no_cgmr.json", source
+        )
         self.assertIn('RUNTIME_DIR="${BUNDLE_DIR}/.runtime"', source)
         self.assertIn("flock", source)
         self.assertIn("--smoke-test", source)

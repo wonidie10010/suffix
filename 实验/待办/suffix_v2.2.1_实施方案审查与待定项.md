@@ -1,6 +1,6 @@
 # DEML suffix v2.2.1：执行版方案
 
-状态：实现已落地；本地静态、JSON 和 runner/mock 合同检查已通过。真实 PyTorch/CUDA sidecar 测试、smoke 和两组 formal 仍待服务器执行。
+状态：实现、针对性测试、GitHub/服务器同步、smoke 和两组 formal 已完成。正式结果以服务器上的三件 artifact 与 bundle manifest 为准。
 
 ## 1. 本次已经确定的范围
 
@@ -129,21 +129,32 @@ Python：/mnt/my_disk/tch/suffix/实验/环境和实验/.runtime/envs/deml-02d13
 4. 运行结束后再用 GT 做 offline 汇总，只报告每个数据集和 overall 的 token accuracy、样本均值，以及 R 的 trigger/attempt/accept/reject/预算统计。smoke、失败或不完整目录不进入最终结果。
 5. 对两组 artifact 计算 SHA-256，并把运行 SHA、目录、配置摘要和最终统计写入 runner 的 bundle manifest；不生成新的 Excel 汇总表。
 
-## 8. 目前真正还没确定的地方
+### 7.5 本轮实际执行记录
 
-1. **每条样本的实际 `eval_start_pos`**：它由正式运行时 tokenizer 的 special-token 结果决定，并写入每条记录；不额外插入 EOS，以保证 Run A/Run B 输入完全一致。这不是需要人为再选的实验变量。
-2. **formal 运行结果**：在服务器两组运行完成前，accuracy、R 接受数、hidden loss 变化和最终差异都不能预报。
+- 本地实现与静态/JSON/runner 合同测试完成；本地无 PyTorch，因此真实 sidecar 测试在服务器环境执行。
+- GitHub 已同步到提交 `993f25443aec39b965fe0673a6271834369ad3da`；服务器已快进到同一提交，保留服务器原有数据、模型缓存和历史结果。
+- smoke 已通过；正式运行在服务器完成。Run A 与 Run B 都生成了 12 条记录，且三件核心 artifact 均通过验收。
+- 本轮正式结果目录和汇总 manifest：
+  - `results/invert_timestamp_runs/frozen_original_baseline/20260903-185506`
+  - `results/invert_timestamp_runs/suffix_reoptimization_v2.2.1/20260903-193500`
+  - `实验/结果/suffix_v2.2.1_bundle/ablation_manifest.json`
 
-除此之外，数据集、样本数量、样本位置、模型、服务器实际运行环境、v1.3.1 候选参数、触发策略和 GT 信息边界都已经确定；代码、测试和 runner 已落地，待服务器实测确认。
+## 8. 运行后状态与仍需注意的限制
+
+1. **`eval_start_pos` 已实测确定**：12 条正式记录均为 `0`；没有额外插入 EOS，Run A/Run B 输入保持一致。
+2. **formal 结果已实测完成**：Run A baseline 总体宏平均为 `0.6679977279`，Run B baseline+R 最终总体宏平均为 `0.7495538158`；逐数据集与 R 诊断见 bundle manifest 和最终汇报。
+3. **仍需注意的限制**：正式样本只有 12 条（每个数据集前 4 条），因此结果只能说明本次固定样本上的行为，不能外推为论文规模结论；R 的接受判断仍然只依据 hidden loss，accuracy 仅在运行完成后离线统计。
+
+除此之外，数据集、样本数量、样本位置、模型、服务器实际运行环境、v1.3.1 候选参数、触发策略和 GT 信息边界都已经确定。
 
 ## 9. 执行前 checklist
 
 - [x] 冻结 fixed prefix 处理、运行时 `eval_start_pos`、模型路径和 runner 入口。
 - [x] 实现 `suffix_reoptimization_v2_2_1`、selector 和独立 config。
 - [x] 完成 Run B 重优化前后状态记录、GT 泄漏、rollback、预算的 mock 测试。
-- [ ] 服务器 PyTorch/CUDA 测试通过后，只提交本次相关文件并推送 GitHub。
-- [ ] 服务器 fast-forward 到同一 SHA，保留原有 data/模型/结果。
-- [ ] smoke 通过后运行两次 12 条 formal：每个数据集前 4 条。
-- [ ] 比较 Run A 与 Run B，并只用 offline GT 报告最终准确率。
+- [x] 服务器 PyTorch/CUDA 测试通过后，只提交本次相关文件并推送 GitHub。
+- [x] 服务器 fast-forward 到同一 SHA，保留原有 data/模型/结果。
+- [x] smoke 通过后运行两次 12 条 formal：每个数据集前 4 条。
+- [x] 比较 Run A 与 Run B，并只用 offline GT 报告最终准确率。
 
-正式结果和 SHA-256 manifest 预计写入 `实验/结果/suffix_v2.2.1_bundle/ablation_manifest.json`；三件原始 artifact 仍以 `results/invert_timestamp_runs/<method>/<timestamp>/` 为准。
+正式结果和 SHA-256 manifest 已写入 `实验/结果/suffix_v2.2.1_bundle/ablation_manifest.json`；三件原始 artifact 仍以 `results/invert_timestamp_runs/<method>/<timestamp>/` 为准。

@@ -107,6 +107,15 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(4, summary["accepted_sample_count"])
         self.assertEqual(4, runner.accuracy_summary(records, use_pre=True)["sample_count"])
 
+    def test_compare_runs_uses_frozen_baseline_final_token_ids(self):
+        baseline = record("Skytrax", 0, "frozen_original_baseline")
+        baseline["optimization_result"]["tokens"] = "decoded baseline text"
+        baseline["frozen_original_baseline_result"] = {"final_tokens": [1, 2]}
+        suffix = record("Skytrax", 0, "suffix_reoptimization_v2.2.1", 0.75, 0.5)
+        comparison = runner.compare_runs([baseline], [suffix])
+        self.assertEqual(1, comparison["comparable_samples"])
+        self.assertEqual(1, comparison["pre_tokens_equal_to_baseline_final_tokens"])
+
 
 if __name__ == "__main__":
     unittest.main()

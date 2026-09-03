@@ -438,8 +438,13 @@ def compare_runs(baseline_records, suffix_records):
         )
         baseline = baseline_by_key.get(key)
         pre_tokens = record_suffix_result(record).get("pre_tokens")
-        baseline_tokens = baseline.get("optimization_result", {}).get("tokens") \
-            if baseline else None
+        if baseline:
+            baseline_result = baseline.get("frozen_original_baseline_result") or {}
+            baseline_tokens = baseline_result.get("final_tokens")
+            if baseline_tokens is None:
+                baseline_tokens = baseline.get("optimization_result", {}).get("tokens")
+        else:
+            baseline_tokens = None
         if baseline is None or pre_tokens is None or baseline_tokens is None:
             continue
         comparable += 1

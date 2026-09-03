@@ -1,0 +1,11 @@
+{
+  "include_configs": [
+    "l24_deml3x4.json"
+  ],
+  "suffix_version": "none",
+  "suffix_reoptimization_v2_1": false,
+  "suffix_reoptimization_v2_1_1": false,
+  "suffix_reoptimization_v2_2_1": false,
+  "cgmr_version": "none",
+  "output_dir": "l24_deml3x4_baseline"
+}

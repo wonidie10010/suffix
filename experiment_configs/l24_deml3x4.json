@@ -1,0 +1,56 @@
+{
+  "include_configs": [
+    "../suffix_optimization_methods/configs/advanced_methods.json"
+  ],
+  "datasets": [
+    {
+      "name": "Skytrax",
+      "path": "skytrax-reviews-dataset/data/airline.csv",
+      "type": "github",
+      "len": 4
+    },
+    {
+      "name": "CMS",
+      "path": "data/cms.json",
+      "type": "local",
+      "len": 4
+    },
+    {
+      "name": "ECHR_Law",
+      "path": "data/ECHR-ACL2019/EN_test",
+      "type": "local",
+      "len": 4
+    }
+  ],
+  "dataset_path": "skytrax-reviews-dataset/data/airline.csv",
+  "dataset_type": "github",
+  "dataset_len": 4,
+  "base_model_name": "Qwen/Qwen2.5-1.5B",
+  "lr": 0.1,
+  "epoch": 1000,
+  "alpha": 0.001,
+  "clip": true,
+  "num_invert_layers": 24,
+  "init_method": "uniform",
+  "init_param": 0.1,
+  "optim_method": "cosine",
+  "invert_method": "cosine",
+  "filter_nonascii": true,
+  "perplexity": true,
+  "top_k_ppl": 10,
+  "top_k_cos": 10,
+  "suffix_version": "none",
+  "cgmr_version": "none",
+  "cgmr_v1_0": false,
+  "cgmr_v1_1": false,
+  "cgmr_v1_2": false,
+  "suffix_reoptimization_v2_1": false,
+  "suffix_reoptimization_v2_1_1": false,
+  "suffix_reoptimization_v2_2_1": false,
+  "quantization": "none",
+  "device_map": "single_gpu",
+  "offload_state_dict": true,
+  "log_dir": "results/invert_timestamp_runs",
+  "seed": 0,
+  "output_dir": "l24_deml3x4_baseline"
+}

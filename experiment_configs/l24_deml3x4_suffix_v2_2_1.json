@@ -1,0 +1,26 @@
+{
+  "include_configs": [
+    "l24_deml3x4.json"
+  ],
+  "suffix_version": "v2.2.1",
+  "suffix_reoptimization_v2_1": false,
+  "suffix_reoptimization_v2_1_1": false,
+  "suffix_reoptimization_v2_2_1": true,
+  "suffix_reoptimization_v2_2_1_log": true,
+  "suffix_v2_2_1_max_attempts": 2,
+  "suffix_v2_2_1_max_attempts_per_position": 1,
+  "suffix_v2_2_1_steps": 50,
+  "suffix_v2_2_1_lr": 0.03,
+  "suffix_v2_2_1_trigger_mode": "always",
+  "suffix_v2_2_1_trigger_threshold": 0.0,
+  "suffix_v2_2_1_hidden_weight_mode": "front_decay",
+  "suffix_v2_2_1_hidden_weight_decay": 0.9,
+  "suffix_v2_2_1_hidden_weight_floor": 0.2,
+  "suffix_v2_2_1_prox_weight": 0.005,
+  "suffix_v2_2_1_range_weight": 0.001,
+  "suffix_v2_2_1_range_top_k": 10,
+  "suffix_v2_2_1_accept_mode": "hidden_loss",
+  "suffix_v2_2_1_filter_nonascii": true,
+  "cgmr_version": "none",
+  "output_dir": "l24_deml3x4_suffix_v2_2_1"
+}

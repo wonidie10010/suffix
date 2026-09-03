@@ -284,6 +284,52 @@ def _resolved_suffix_v211_config(args):
     return resolved
 
 
+def _resolved_suffix_v221_config(args):
+    defaults = {
+        "enabled": False,
+        "log_enabled": True,
+        "max_attempts": 2,
+        "max_attempts_per_position": 1,
+        "steps": 50,
+        "lr": 0.03,
+        "trigger_mode": "always",
+        "trigger_threshold": 0.0,
+        "hidden_weight_mode": "front_decay",
+        "hidden_weight_decay": 0.90,
+        "hidden_weight_floor": 0.20,
+        "prox_weight": 0.005,
+        "range_weight": 0.001,
+        "range_top_k": 10,
+        "accept_mode": "hidden_loss",
+        "filter_nonascii": True,
+    }
+    prefixes = {
+        "enabled": "suffix_reoptimization_v2_2_1",
+        "log_enabled": "suffix_reoptimization_v2_2_1_log",
+    }
+    resolved = {
+        key: getattr(
+            args,
+            prefixes.get(key, "suffix_v2_2_1_" + key),
+            default,
+        )
+        for key, default in defaults.items()
+    }
+    resolved.update({
+        "version": "v2.2.1",
+        "method": "suffix_reoptimization_v2.2.1",
+        "model_contract": "Qwen2/Qwen2.5 causal LM",
+        "candidate_policy": "original_embedding_top10_plus_ppl_top10_hidden_cosine",
+        "loss_metric": "front_decay_hidden_cosine_loss_plus_prox_plus_range",
+        "final_acceptance": "hidden_loss_decreased_without_epsilon",
+        "formal_gt_blind": True,
+        "initial_stage": "original_deml_stage1",
+        "initial_stage_epoch_source": "optimization.epoch",
+        "discretization": "original_deml_candidate_order_and_hidden_cosine",
+    })
+    return resolved
+
+
 def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
                           reconstruction_path, summary_excel_path,
                           total_samples, model_config_layers, model_type,
@@ -371,6 +417,7 @@ def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
             ),
         },
         "advanced_methods": {
+            "suffix_reoptimization_v2_2_1": _resolved_suffix_v221_config(args),
             "suffix_reoptimization_v2_1_1": _resolved_suffix_v211_config(args),
             "suffix_reoptimization_v2_1": _resolved_suffix_v21_config(args),
             "suffix_reoptimization_v2_0": _resolved_suffix_v20_config(args),
@@ -1076,6 +1123,7 @@ def _format_accuracy_pair(before, after):
 def _suffix_result(record):
     return (
         record.get("suffix_reoptimization_result")
+        or record.get("suffix_reoptimization_v2_2_1_result")
         or record.get("suffix_reoptimization_v2_1_1_result")
         or record.get("suffix_reoptimization_v2_1_result")
         or record.get("suffix_reoptimization_v2_0_result")
@@ -1242,6 +1290,7 @@ def extract_experiment_stage_summary(record):
         if selected_advanced_method in (
             "suffix_reoptimization_v2.1",
             "suffix_reoptimization_v2.1.1",
+            "suffix_reoptimization_v2.2.1",
         ):
             experiment_view = record.get("advanced_method") or {}
             if baseline_accuracy is None:

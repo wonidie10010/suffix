@@ -189,9 +189,9 @@ class ConfigAndBoundaryTests(unittest.TestCase):
             [0],
             embed_layer,
         )
-        self.assertTrue(torch.equal(anchored[:, 0], embed_layer.weight[0]))
-        self.assertTrue(torch.equal(anchored[:, 1], embed_layer.weight[7]))
-        self.assertTrue(torch.equal(anchored[:, 2], current[:, 2]))
+        self.assertTrue(torch.equal(anchored[0, 0], embed_layer.weight[0]))
+        self.assertTrue(torch.equal(anchored[0, 1], embed_layer.weight[7]))
+        self.assertTrue(torch.equal(anchored[0, 2], current[0, 2]))
 
 
 class FlowAndBudgetTests(unittest.TestCase):

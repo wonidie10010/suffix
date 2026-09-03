@@ -132,7 +132,7 @@ Python：/mnt/my_disk/tch/suffix/实验/环境和实验/.runtime/envs/deml-02d13
 ### 7.5 本轮实际执行记录
 
 - 本地实现与静态/JSON/runner 合同测试完成；本地无 PyTorch，因此真实 sidecar 测试在服务器环境执行。
-- GitHub 已同步到提交 `993f25443aec39b965fe0673a6271834369ad3da`；服务器已快进到同一提交，保留服务器原有数据、模型缓存和历史结果。
+- 两组 formal 实际执行时使用提交 `993f25443aec39b965fe0673a6271834369ad3da`；实验完成后修正 runner 的 baseline token 一致性诊断并补文档，GitHub 与服务器当前 HEAD 为 `3d02cf4`，服务器原有数据、模型缓存和历史结果均保留。
 - smoke 已通过；正式运行在服务器完成。Run A 与 Run B 都生成了 12 条记录，且三件核心 artifact 均通过验收。
 - 本轮正式结果目录和汇总 manifest：
   - `results/invert_timestamp_runs/frozen_original_baseline/20260903-185506`

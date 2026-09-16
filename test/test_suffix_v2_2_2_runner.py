@@ -43,7 +43,8 @@ class RunnerTests(unittest.TestCase):
     def test_layout_dry_run_does_not_launch_experiment_or_write(self):
         with mock.patch.object(runner.subprocess,"run",side_effect=AssertionError("no subprocess")), \
              mock.patch.object(runner,"dump",side_effect=AssertionError("no writes")), contextlib.redirect_stdout(io.StringIO()) as output:
-            code=runner.main(["dry-run","--project",str(ROOT),"--runtime","unused","--result-root","unused"])
+            code=runner.main(["dry-run","--project",str(ROOT),"--runtime","unused","--result-root","unused",
+                              "--model-path",str(ROOT/"outputs/checkpoint_v222_impl/unused_model")])
         self.assertEqual(0,code)
         self.assertFalse(json.loads(output.getvalue())["real_model_loaded"])
 
@@ -61,7 +62,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(0,error.exception.code); fake.assert_not_called()
 
     def test_pair_config_drift_rejected(self):
-        configs=runner.preflight(ROOT)["configs"]
+        configs={label:runner.load_config(ROOT/path) for label,path in runner.CONFIGS.items()}
         configs["on"]["lr"]=10
         with self.assertRaises(ValueError):
             runner.validate_pair(configs)
@@ -82,7 +83,7 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(fail=fail), tempfile.TemporaryDirectory(dir=temp_root) as name:
                 project=Path(name)
                 (project/"outputs").mkdir()
-                plan=runner.preflight(ROOT)
+                plan=runner.preflight(ROOT,model_path=project/"unused_model")
                 plan["pending_server_checks"]=[]
                 calls=[]
                 def fake_run(command,**kwargs):

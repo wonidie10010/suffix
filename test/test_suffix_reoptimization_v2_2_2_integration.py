@@ -80,7 +80,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual("suffix_reoptimization_v2.2.1",select("v2.2.1",disabled,disabled,disabled,disabled,suffix_reopt_v2_2_1_config=enabled))
 
     def test_config_registry_and_fixed_summary(self):
-        config=runner.preflight(ROOT)["configs"]["on"]
+        config=runner.load_config(ROOT/runner.CONFIGS["on"])
         parsed=cp.config_from_mapping(config)
         resolved=_resolved_suffix_v222_config(types.SimpleNamespace(**config))
         self.assertTrue(parsed.checkpoint_enabled)

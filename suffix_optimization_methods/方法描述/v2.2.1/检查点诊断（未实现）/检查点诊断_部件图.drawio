@@ -1,0 +1,160 @@
+<mxfile host="Electron">
+  <diagram id="checkpoint-segment-v1" name="检查点诊断：段级审查与单点修复">
+    <mxGraphModel dx="2059" dy="1183" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1640" pageHeight="1520" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=24;fontColor=#1f2937;" value="&lt;b&gt;部件图：检查点诊断&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:15px&quot;&gt;每 5 个已提交 token 做段级审查；只定位一处、只修复一次｜设计完成 · 尚未实现 / 验证&lt;/font&gt;" vertex="1">
+          <mxGeometry height="70" width="1480" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="segment" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;完成 5 个 token 的位置处理&lt;/b&gt;&lt;br&gt;各位置 R 处理结束后计数&lt;br&gt;固定前缀之后，严格不重叠" vertex="1">
+          <mxGeometry height="110" width="280" x="40" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="sum" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;观察当前离散段&lt;/b&gt;&lt;br&gt;当前与目标各自累加 5 个 hidden&lt;br&gt;计算两组和向量的 cosine：C" vertex="1">
+          <mxGeometry height="110" width="280" x="400" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="trigger" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Microsoft YaHei;fontSize=18;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;C &amp;lt; 0.90？&lt;/b&gt;" vertex="1">
+          <mxGeometry height="150" width="230" x="760" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="trajectory" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;展开段内累计轨迹&lt;/b&gt;&lt;br&gt;第 1 点 → 前 2 点 → … → 全 5 点&lt;br&gt;看加入哪一点后 cosine 明显下降" vertex="1">
+          <mxGeometry height="130" width="360" x="1080" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="classify" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;区分两类下降&lt;/b&gt;&lt;br&gt;孤立异常：后续 1–2 点基本恢复&lt;br&gt;累计恶化：下降后到段末持续未恢复&lt;br&gt;&lt;br&gt;“基本恢复”的容忍量需预先设定" vertex="1">
+          <mxGeometry height="170" width="360" x="1080" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="locate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;只定位一个位置 p&lt;/b&gt;&lt;br&gt;优先最早持续未恢复下降点&lt;br&gt;仅有孤立异常时，取最大下降点" vertex="1">
+          <mxGeometry height="110" width="360" x="1080" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="pool" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;复用 p 的有效原候选表&lt;/b&gt;&lt;br&gt;按合法性与单点质量下限筛选&lt;br&gt;无新候选源；不放宽阈值" vertex="1">
+          <mxGeometry height="110" width="280" x="710" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="forward" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;每个合格候选重新前向&lt;/b&gt;&lt;br&gt;只替换 p，其他 token ID 固定&lt;br&gt;复用 p 前上下文，重算 p 至段末&lt;br&gt;重新计算整个 5-token 段的 C" vertex="1">
+          <mxGeometry height="150" width="280" x="360" y="640" as="geometry" />
+        </mxCell>
+        <mxCell id="best" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;选段级 C 最大者&lt;/b&gt;&lt;br&gt;所有候选基于同一个旧段&lt;br&gt;保留原结果作为比较基准" vertex="1">
+          <mxGeometry height="110" width="240" x="40" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="accept" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Microsoft YaHei;fontSize=17;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;最佳有效 C&lt;br&gt;严格优于原 C？&lt;/b&gt;" vertex="1">
+          <mxGeometry height="140" width="210" x="60" y="880" as="geometry" />
+        </mxCell>
+        <mxCell id="commit" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;提交唯一 token 替换&lt;/b&gt;&lt;br&gt;更新已提交前缀&lt;br&gt;使旧下游上下文失效" vertex="1">
+          <mxGeometry height="100" width="280" x="390" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="keep" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;保留原 token 与上下文&lt;/b&gt;&lt;br&gt;没有合格候选 / 没有改善 / 试算失败" vertex="1">
+          <mxGeometry height="90" width="350" x="40" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="finish" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=16;fontColor=#1f2937;spacing=10;" value="&lt;b&gt;结束当前 checkpoint&lt;/b&gt;&lt;br&gt;即使 C 仍低于 0.90，也不再修复&lt;br&gt;按最终前缀继续下一段恢复&lt;br&gt;不足 5 个 token 的尾段直接完成" vertex="1">
+          <mxGeometry height="150" width="360" x="1080" y="880" as="geometry" />
+        </mxCell>
+        <mxCell id="notes" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontFamily=Microsoft YaHei;fontSize=15;fontColor=#1f2937;spacing=10;dashed=1;align=left;spacingLeft=18;" value="&lt;b&gt;输入与判断边界&lt;/b&gt;&lt;br&gt;两边使用同模型、同目标层、同位置的 hidden；当前侧来自离散 token 前向。&lt;br&gt;只使用 target hidden，不使用 GT token、accuracy 或 oracle correctness。&lt;br&gt;持续低分但无明显下降、段末没有后效证据等情况，可触发而不定位。&lt;br&gt;&lt;b&gt;工程缺口：&lt;/b&gt;live v2.2.1 没有候选质量下限；需显式配置，不能借用触发阈值。" vertex="1">
+          <mxGeometry height="190" width="950" x="40" y="370" as="geometry" />
+        </mxCell>
+        <mxCell id="e_segment_sum" edge="1" parent="1" source="segment" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="sum" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_sum_trigger" edge="1" parent="1" source="sum" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="trigger" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_trigger_trajectory" edge="1" parent="1" source="trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="trajectory" value="是">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_trajectory_classify" edge="1" parent="1" source="trajectory" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="classify" value="观察后续是否恢复">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_classify_locate" edge="1" parent="1" source="classify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="locate" value="存在可定位证据">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_locate_pool" edge="1" parent="1" source="locate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" target="pool" value="唯一位置">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_pool_forward" edge="1" parent="1" source="pool" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" target="forward" value="合格替代候选">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_forward_best" edge="1" parent="1" source="forward" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" target="best" value="各候选的新段级 C">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_best_accept" edge="1" parent="1" source="best" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="accept" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_accept_commit" edge="1" parent="1" source="accept" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="commit" value="是；不要求达到 0.90">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_commit_finish" edge="1" parent="1" source="commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0;entryY=0.4;" target="finish" value="使用修复后的前缀">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_accept_keep" edge="1" parent="1" source="accept" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.35;entryY=0;" target="keep" value="否 / 无有效评分">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_pool_keep" edge="1" parent="1" source="pool" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.6;entryY=0;" target="keep" value="无合格替代候选">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="850" y="820" />
+              <mxPoint x="300" y="820" />
+              <mxPoint x="300" y="1090" />
+              <mxPoint x="250" y="1090" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_keep_finish" edge="1" parent="1" source="keep" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;entryX=0.5;entryY=1;" target="finish" value="保留原结果，继续后续恢复">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="215" y="1330" />
+              <mxPoint x="1260" y="1330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_no_localization" edge="1" parent="1" source="classify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;entryX=0.5;entryY=0;" target="finish" value="无法定位：不修复">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1490" y="475" />
+              <mxPoint x="1490" y="820" />
+              <mxPoint x="1260" y="820" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_pass" edge="1" parent="1" source="trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;fontFamily=Microsoft YaHei;fontSize=13;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;entryX=1;entryY=0.4;" target="finish" value="否：直接结束">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="875" y="120" />
+              <mxPoint x="1570" y="120" />
+              <mxPoint x="1570" y="940" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend_title" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=15;fontColor=#1f2937;" value="&lt;b&gt;图例&lt;/b&gt;" vertex="1">
+          <mxGeometry height="40" width="90" x="40" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_swatch_0" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=12;fontColor=#1f2937;spacing=10;" value="" vertex="1">
+          <mxGeometry height="20" width="30" x="150" y="1410" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text_0" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=14;fontColor=#1f2937;" value="已恢复输入" vertex="1">
+          <mxGeometry height="40" width="210" x="190" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_swatch_1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontFamily=Microsoft YaHei;fontSize=12;fontColor=#1f2937;spacing=10;" value="" vertex="1">
+          <mxGeometry height="20" width="30" x="420" y="1410" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text_1" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=14;fontColor=#1f2937;" value="诊断 / 候选评价" vertex="1">
+          <mxGeometry height="40" width="210" x="460" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_swatch_2" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Microsoft YaHei;fontSize=12;fontColor=#1f2937;spacing=10;" value="" vertex="1">
+          <mxGeometry height="20" width="30" x="690" y="1410" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text_2" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=14;fontColor=#1f2937;" value="决策条件" vertex="1">
+          <mxGeometry height="40" width="210" x="730" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_swatch_3" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=12;fontColor=#1f2937;spacing=10;" value="" vertex="1">
+          <mxGeometry height="20" width="30" x="960" y="1410" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text_3" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=14;fontColor=#1f2937;" value="提交 / 继续" vertex="1">
+          <mxGeometry height="40" width="210" x="1000" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_swatch_4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontFamily=Microsoft YaHei;fontSize=12;fontColor=#1f2937;spacing=10;" value="" vertex="1">
+          <mxGeometry height="20" width="30" x="1230" y="1410" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text_4" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Microsoft YaHei;fontSize=14;fontColor=#1f2937;" value="保留 / 约束" vertex="1">
+          <mxGeometry height="40" width="210" x="1270" y="1400" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

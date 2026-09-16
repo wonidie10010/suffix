@@ -1,0 +1,13 @@
+{
+  "include_configs": [
+    "l24_deml3x4.json"
+  ],
+  "suffix_version": "v2.2.2",
+  "suffix_reoptimization_v2_1": false,
+  "suffix_reoptimization_v2_1_1": false,
+  "suffix_reoptimization_v2_2_1": false,
+  "suffix_reoptimization_v2_2_2": true,
+  "suffix_v2_2_2_checkpoint_enabled": false,
+  "cgmr_version": "none",
+  "output_dir": "l24_deml3x4_suffix_v2_2_2_cp_off"
+}

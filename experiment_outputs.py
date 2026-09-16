@@ -10,6 +10,38 @@ import warnings
 PROGRESS_ACTIVE = False
 
 
+def checkpoint_offline_evaluation(result, reference_ids, eval_start_pos):
+    """Only call after the entire v2.2.2 online sidecar has returned."""
+    reference = [int(value) for value in reference_ids]
+    predicted = result["final_tokens"]
+    if len(reference) != len(predicted):
+        raise ValueError("offline checkpoint token alignment mismatch")
+    correctness = [int(a) == b for a, b in zip(predicted[eval_start_pos:], reference[eval_start_pos:])]
+    events = []
+    for event in result["checkpoint"]["events"]:
+        item = {"checkpoint_id": event["checkpoint_id"], "accepted": event["accepted"]}
+        a, b = event["a"], event["b"]
+        item["segment_errors_before"] = sum(
+            int(value) != reference[a + offset]
+            for offset, value in enumerate(event["segment_tokens_before"]))
+        item["triggered"] = event["triggered"]
+        if event["accepted"]:
+            position = event["selected_position"]
+            before = event["old_token_id"] == reference[position]
+            after = event["new_token_id"] == reference[position]
+            item.update(position=position, old_correct=before, new_correct=after,
+                        repaired=not before and after, damaged=before and not after)
+        events.append(item)
+    return {
+        "evaluated_after_online_return": True, "eval_start_pos": eval_start_pos,
+        "evaluated_token_count": len(correctness), "correct_token_count": sum(correctness),
+        "accuracy": sum(correctness)/len(correctness) if correctness else None,
+        "final_correctness": correctness, "checkpoint_events": events,
+        "direct_repairs": sum(bool(e.get("repaired")) for e in events),
+        "direct_damage": sum(bool(e.get("damaged")) for e in events),
+    }
+
+
 def suppress_startup_noise():
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
@@ -330,6 +362,59 @@ def _resolved_suffix_v221_config(args):
     return resolved
 
 
+
+def _resolved_suffix_v222_config(args):
+    defaults = {
+        "enabled": False,
+        "log_enabled": True,
+        "max_attempts": 2,
+        "max_attempts_per_position": 1,
+        "steps": 50,
+        "lr": 0.03,
+        "trigger_mode": "always",
+        "trigger_threshold": 0.0,
+        "hidden_weight_mode": "front_decay",
+        "hidden_weight_decay": 0.90,
+        "hidden_weight_floor": 0.20,
+        "prox_weight": 0.005,
+        "range_weight": 0.001,
+        "range_top_k": 10,
+        "accept_mode": "hidden_loss",
+        "filter_nonascii": True,
+    }
+    prefixes = {
+        "enabled": "suffix_reoptimization_v2_2_2",
+        "log_enabled": "suffix_reoptimization_v2_2_2_log",
+    }
+    resolved = {
+        key: getattr(
+            args,
+            prefixes.get(key, "suffix_v2_2_2_" + key),
+            default,
+        )
+        for key, default in defaults.items()
+    }
+    resolved.update({
+        "version": "v2.2.2",
+        "method": "suffix_reoptimization_v2.2.2",
+        "model_contract": "Qwen2/Qwen2.5 causal LM",
+        "candidate_policy": "original_embedding_top10_plus_ppl_top10_hidden_cosine",
+        "loss_metric": "front_decay_hidden_cosine_loss_plus_prox_plus_range",
+        "final_acceptance": "hidden_loss_decreased_without_epsilon",
+        "formal_gt_blind": True,
+        "initial_stage": "original_deml_stage1",
+        "initial_stage_epoch_source": "optimization.epoch",
+        "discretization": "original_deml_candidate_order_and_hidden_cosine",
+    })
+    resolved.update({key.removeprefix("suffix_v2_2_2_"): value
+                     for key, value in vars(args).items() if key.startswith("suffix_v2_2_2_checkpoint_")})
+    resolved["initial_stage"] = "copied_legacy_stage1_in_v222_sidecar"
+    resolved["r_acceptance"] = "finite_continuous_hidden_loss_strictly_decreases"
+    resolved["checkpoint_acceptance"] = "all_eligible_candidates_scored_then_segment_sum_cosine_strictly_increases"
+    resolved["final_acceptance"] = "independent_R_and_checkpoint_transactions"
+    return resolved
+
+
 def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
                           reconstruction_path, summary_excel_path,
                           total_samples, model_config_layers, model_type,
@@ -417,6 +502,7 @@ def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
             ),
         },
         "advanced_methods": {
+            "suffix_reoptimization_v2_2_2": _resolved_suffix_v222_config(args),
             "suffix_reoptimization_v2_2_1": _resolved_suffix_v221_config(args),
             "suffix_reoptimization_v2_1_1": _resolved_suffix_v211_config(args),
             "suffix_reoptimization_v2_1": _resolved_suffix_v21_config(args),
@@ -1123,6 +1209,7 @@ def _format_accuracy_pair(before, after):
 def _suffix_result(record):
     return (
         record.get("suffix_reoptimization_result")
+        or record.get("suffix_reoptimization_v2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_1_result")
         or record.get("suffix_reoptimization_v2_1_1_result")
         or record.get("suffix_reoptimization_v2_1_result")
@@ -1290,6 +1377,7 @@ def extract_experiment_stage_summary(record):
         if selected_advanced_method in (
             "suffix_reoptimization_v2.1",
             "suffix_reoptimization_v2.1.1",
+            "suffix_reoptimization_v2.2.2",
             "suffix_reoptimization_v2.2.1",
         ):
             experiment_view = record.get("advanced_method") or {}

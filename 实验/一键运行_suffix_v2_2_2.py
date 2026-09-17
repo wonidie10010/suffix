@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v2.2.2 paired CP-off/on launcher. Use --dry-run during implementation."""
+"""v2.2.2 CP-on-only launcher. Use --dry-run during implementation."""
 import argparse
 import os
 from pathlib import Path

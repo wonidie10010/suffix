@@ -53,8 +53,10 @@ class SuffixReoptimizationV222Config:
     checkpoint_enabled: bool = False
     checkpoint_size: int = 5
     checkpoint_stride: int = 5
-    checkpoint_trigger_cosine: float = 0.90
-    checkpoint_diagnostic_tolerance: float = 0.05
+    checkpoint_trigger_metric: str = "pointwise_logmeanexp"
+    checkpoint_deviation_tau: float = 0.05
+    checkpoint_trigger_deviation: float = 0.05
+    checkpoint_diagnostic_tolerance: float = 0.02
     checkpoint_candidate_min_cosine: float = 0.90
     checkpoint_candidate_threshold_source: str = "user_fixed_2026_09_16"
     checkpoint_forward_mode: str = "full_prefix"
@@ -64,7 +66,8 @@ class SuffixReoptimizationV222Config:
     checkpoint_recursive: bool = False
     checkpoint_numeric_norm_epsilon: float = 1e-8
     checkpoint_score_dtype: str = "float32"
-    checkpoint_schema_version: int = 1
+    checkpoint_schema_version: int = 3
+    checkpoint_downstream_policy: str = "sequential_rerank_to_checkpoint_end"
 
     def __post_init__(self):
         validate_checkpoint_config(self)
@@ -192,7 +195,7 @@ def _rerank_positions(
         invert_method, filter_nonascii, add_perplexity, top_k_ppl, top_k_cos,
         eval_start_pos, embedding_top_indices,
         select_candidate_from_top_indices, get_perplexity,
-        forward_and_get_last_hidden_state, rerank_end=None):
+        forward_and_get_last_hidden_state, rerank_end=None, forward_stats=None):
     """Copy Original DEML candidate order without consulting target ids."""
     sequence_length = int(input_embed.shape[1])
     if current_tokens is None:
@@ -232,6 +235,9 @@ def _rerank_positions(
     for position in range(rerank_start, rerank_end):
         top_list = list(ret_top_k.get(position, [ret_list[position]]))
         if position > 0 and add_perplexity:
+            if forward_stats is not None:
+                forward_stats["downstream_forward_calls"] += 1
+                forward_stats["forward_token_count"] += position
             _, topk_ids = get_perplexity(
                 list(ret_list[:position]),
                 model,
@@ -246,6 +252,9 @@ def _rerank_positions(
             replaced = list(ret_list)
             replaced[position] = int(token_id)
             replaced_sequences.append(replaced)
+        if forward_stats is not None:
+            forward_stats["downstream_forward_calls"] += 1
+            forward_stats["forward_token_count"] += len(replaced_sequences) * sequence_length
         hidden_states = forward_and_get_last_hidden_state(
             model,
             replaced_sequences,
@@ -672,7 +681,15 @@ def run_suffix_reoptimization_v2_2_2(
             model, embed_layer, current_tokens, current_embedding,
             target_hidden_state, layer_id, register_layer_hooks, tokenizer,
             config, candidate_tables, position - 4, position, eval_start_pos,
-            filter_nonascii)
+            filter_nonascii,
+            downstream_rerank=lambda trial, begin, end, stats: _rerank_positions(
+                current_embedding[:, :end].detach().clone(), trial, begin,
+                fixed_prefix_tokens, tokenizer, model, embed_layer,
+                target_hidden_state[:, :end], layer_id, invert_method,
+                filter_nonascii, add_perplexity, top_k_ppl, top_k_cos,
+                eval_start_pos, embedding_top_indices,
+                select_candidate_from_top_indices, get_perplexity,
+                forward_and_get_last_hidden_state, rerank_end=end, forward_stats=stats))
         cp_events.append(event)
         if event["accepted"]:
             dirty_positions.update(range(position + 1, sequence_length))
@@ -920,8 +937,10 @@ def validate_checkpoint_config(config):
     """Frozen first-release CP contract; no silent defaults at config boundary."""
     expected = {
         "checkpoint_size": 5, "checkpoint_stride": 5,
-        "checkpoint_trigger_cosine": 0.90,
-        "checkpoint_diagnostic_tolerance": 0.05,
+        "checkpoint_trigger_metric": "pointwise_logmeanexp",
+        "checkpoint_deviation_tau": 0.05,
+        "checkpoint_trigger_deviation": 0.05,
+        "checkpoint_diagnostic_tolerance": 0.02,
         "checkpoint_candidate_min_cosine": 0.90,
         "checkpoint_candidate_threshold_source": "user_fixed_2026_09_16",
         "checkpoint_forward_mode": "full_prefix",
@@ -929,7 +948,8 @@ def validate_checkpoint_config(config):
         "checkpoint_tail_policy": "skip_incomplete",
         "checkpoint_max_repairs": 1, "checkpoint_recursive": False,
         "checkpoint_numeric_norm_epsilon": 1e-8,
-        "checkpoint_score_dtype": "float32", "checkpoint_schema_version": 1,
+        "checkpoint_score_dtype": "float32", "checkpoint_schema_version": 3,
+        "checkpoint_downstream_policy": "sequential_rerank_to_checkpoint_end",
     }
     if type(config.checkpoint_enabled) is not bool:
         raise TypeError("checkpoint_enabled must be boolean")
@@ -942,6 +962,8 @@ def validate_checkpoint_config(config):
 def config_from_mapping(values, require_explicit=True):
     from dataclasses import fields
     parsed = {}
+    if "suffix_v2_2_2_checkpoint_trigger_cosine" in values:
+        raise ValueError("obsolete checkpoint_trigger_cosine; migrate to explicit schema 3 deviation settings")
     for field in fields(SuffixReoptimizationV222Config):
         key = {"enabled": "suffix_reoptimization_v2_2_2",
                "log_enabled": "suffix_reoptimization_v2_2_2_log"}.get(
@@ -1018,6 +1040,38 @@ def segment_cosine(current, target, epsilon=1e-8):
     return score if math.isfinite(score) else None
 
 
+def window_observation(current, target, tau=0.05, epsilon=1e-8):
+    """Pointwise direction errors; scalar aggregation cannot cancel vectors."""
+    if not math.isfinite(tau) or tau <= 0:
+        raise ValueError("checkpoint tau must be positive and finite")
+    if current.shape != target.shape or current.ndim != 3 or current.shape[0] != 1 or current.shape[1] == 0:
+        raise CheckpointContractError("expected matching nonempty [1,m,D] checkpoint hidden states")
+    current, target = current.float(), target.to(current.device).float()
+    nc, nt = current.norm(dim=-1), target.norm(dim=-1)
+    def safe_list(value):
+        return [float(v) if math.isfinite(float(v)) else None for v in value.detach().flatten().cpu()]
+    result = dict(pointwise_cosine=None, pointwise_deviation=None,
+                  current_norms=safe_list(nc), target_norms=safe_list(nt),
+                  D_win=None, invalid_reason=None)
+    if not bool(torch.isfinite(current).all() and torch.isfinite(target).all()
+                and torch.isfinite(nc).all() and torch.isfinite(nt).all()):
+        result["invalid_reason"] = "nonfinite_hidden_or_norm"
+        return result
+    if bool((nc <= epsilon).any() or (nt <= epsilon).any()):
+        result["invalid_reason"] = "zero_or_small_pointwise_norm"
+        return result
+    cosine = ((current / nc.unsqueeze(-1)) * (target / nt.unsqueeze(-1))).sum(dim=-1)
+    if not bool(torch.isfinite(cosine).all()):
+        result["invalid_reason"] = "nonfinite_pointwise_cosine"
+        return result
+    cosine = cosine.clamp(-1, 1)
+    deviation = (1 - cosine) / 2
+    score = tau * (torch.logsumexp(deviation / tau, dim=-1) - math.log(current.shape[1]))
+    result.update(pointwise_cosine=safe_list(cosine), pointwise_deviation=safe_list(deviation),
+                  D_win=float(score.item()))
+    return result
+
+
 def diagnose_segment(cumulative, eta=0.05, start=0):
     """Pure trajectory rule. No fallback to a low individual token score."""
     deltas = [None] + [cumulative[i] - cumulative[i-1] for i in range(1, 5)]
@@ -1072,7 +1126,7 @@ def filter_existing_candidates(table, current_id, tokenizer, vocab_size, filter_
 
 def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
                    register_layer_hooks, tokenizer, config, tables, a, b, start,
-                   filter_nonascii=True):
+                   filter_nonascii=True, *, downstream_rerank=None):
     if embedding.is_cuda:
         torch.cuda.synchronize(embedding.device)
     begun = time.perf_counter()
@@ -1093,6 +1147,16 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
                  candidate_min_cosine=config.checkpoint_candidate_min_cosine,
                  candidate_threshold_source=config.checkpoint_candidate_threshold_source,
                  segment_tokens_before=list(tokens[a:b+1]))
+    event.update(downstream_policy=config.checkpoint_downstream_policy,
+                 schema_version=config.checkpoint_schema_version,
+                 trigger_metric=config.checkpoint_trigger_metric,
+                 deviation_tau=config.checkpoint_deviation_tau,
+                 trigger_deviation=config.checkpoint_trigger_deviation,
+                 is_first_window=a == start, observation_valid=False,
+                 D_win_before=None, D_win_after=None,
+                 candidate_paths=[], segment_tokens_after=list(tokens[a:b+1]),
+                 changed_positions=[], downstream_forward_calls=0, downstream_rerank_positions=0,
+                 downstream_candidate_sequences=0)
     def finish(reason):
         if embedding.is_cuda:
             torch.cuda.synchronize(embedding.device)
@@ -1108,13 +1172,21 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
         event["error_type"] = type(error).__name__
         return finish("invalid_segment_observation")
     target_segment = target[:, a:b+1]
+    observation = window_observation(hidden[:, a:b+1], target_segment,
+                                     config.checkpoint_deviation_tau, config.checkpoint_numeric_norm_epsilon)
+    event.update(observation)
+    event["D_win_before"] = event["D_win_after"] = observation["D_win"]
     old_score = segment_cosine(hidden[:, a:b+1], target_segment)
     event["group_cosine_before"] = event["group_cosine_after"] = old_score
-    if old_score is None:
+    if observation["invalid_reason"] is not None:
         return finish("invalid_segment_observation")
-    event["triggered"] = old_score < config.checkpoint_trigger_cosine
+    event["observation_valid"] = True
+    # Compare in the score's float32 representation; no extra acceptance margin.
+    event["triggered"] = observation["D_win"] > float(torch.tensor(config.checkpoint_trigger_deviation, dtype=torch.float32))
     if not event["triggered"]:
         return finish("passed")
+    if old_score is None:
+        return finish("invalid_acceptance_observation")
     cumulative = [segment_cosine(hidden[:, a:k+1], target[:, a:k+1]) for k in range(a,b+1)]
     event["cumulative_cosine"] = cumulative
     if any(value is None for value in cumulative):
@@ -1137,38 +1209,72 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
     if not eligible:
         return finish("no_eligible_alternative")
     event["repair_attempt_count"] = 1
-    best_id, best_score = None, -math.inf
+    best_id, best_score, best_trial, best_tables = None, -math.inf, None, []
     for index, token in enumerate(eligible):
         trial = list(tokens[:b+1])
         trial[p] = token
-        event["candidate_forward_calls"] += 1
-        event["forward_token_count"] += b+1
         try:
+            trial_tables = []
+            if p < b:
+                if downstream_rerank is None:
+                    raise CheckpointContractError("downstream rerank callback is required")
+                fixed_trial_prefix = list(trial[:p+1])
+                trial, _, trial_tables = downstream_rerank(trial, p+1, b+1, event)
+                if len(trial) != b+1 or trial[:p+1] != fixed_trial_prefix:
+                    raise CheckpointContractError("downstream rerank changed the fixed prefix or length")
+                if [row["position"] for row in trial_tables] != list(range(p+1, b+1)):
+                    raise CheckpointContractError("downstream candidate tables do not cover the suffix")
+                for row in trial_tables:
+                    j = row["position"]
+                    if row["prefix_fingerprint"] != prefix_fingerprint(trial[:j]) or row["selected_token_id"] != trial[j]:
+                        raise CheckpointContractError("downstream candidate context mismatch")
+                    scores = row["candidate_hidden_cosine"]
+                    if not scores or not all(math.isfinite(float(value)) for value in scores):
+                        raise ValueError("invalid downstream candidate scores")
+                event["downstream_rerank_positions"] += len(trial_tables)
+                event["downstream_candidate_sequences"] += sum(len(row["candidate_token_ids"]) for row in trial_tables)
+            event["candidate_forward_calls"] += 1
+            event["forward_token_count"] += b+1
             h = forward_discrete(model, trial, layer_id, register_layer_hooks)
             score = segment_cosine(h[:, a:b+1], target_segment)
+            trial_observation = window_observation(h[:, a:b+1], target_segment,
+                config.checkpoint_deviation_tau, config.checkpoint_numeric_norm_epsilon)
         except Exception as error:
             raise_if_fatal(error)
             event.update(failed_id=token, unevaluated_ids=eligible[index+1:], error_type=type(error).__name__,
                          partial_best_group_cosine=best_score if best_id is not None else None)
             return finish("candidate_forward_failed")
-        if score is None:
+        if score is None or trial_observation["invalid_reason"] is not None:
             event.update(failed_id=token, unevaluated_ids=eligible[index+1:],
                          partial_best_group_cosine=best_score if best_id is not None else None)
             return finish("invalid_candidate_score")
         event["evaluated_ids"].append(token)
         event["candidate_group_cosines"].append(score)
+        event["candidate_paths"].append(dict(seed_token_id=token,
+            segment_tokens=list(trial[a:b+1]), group_cosine=score,
+            **trial_observation,
+            downstream_candidate_tables=trial_tables))
         if score > best_score:
             best_id, best_score = token, score
+            best_trial, best_tables = list(trial), trial_tables
     event.update(all_candidates_scored=True, best_group_cosine=best_score)
     if best_score <= old_score:
         return finish("no_improvement")
     # Prepare replacement BEFORE mutating either piece of formal state.
-    replacement = embed_layer.weight[best_id].detach().to(embedding.device, embedding.dtype).clone()
+    replacement_ids = torch.tensor(best_trial[p:b+1], device=embed_layer.weight.device, dtype=torch.long)
+    replacement = embed_layer.weight[replacement_ids].detach().to(embedding.device, embedding.dtype).clone()
+    updated_tables = {row["position"]: dict(row, generation="checkpoint_{}".format(event["checkpoint_id"]))
+                      for row in best_tables}
+    updated_tables[p] = dict(tables[p], selected_token_id=best_id)
+    changed = [j for j in range(p,b+1) if tokens[j] != best_trial[j]]
     with torch.no_grad():
-        embedding[0, p].copy_(replacement)
-    tokens[p] = best_id
+        embedding[0, p:b+1].copy_(replacement)
+    tokens[p:b+1] = best_trial[p:b+1]
+    tables.update(updated_tables)
     event.update(accepted=True, new_token_id=best_id, group_cosine_after=best_score,
-                 future_context_invalidated_from=b+1)
+                 D_win_after=next(path["D_win"] for path in event["candidate_paths"] if path["seed_token_id"] == best_id),
+                 future_context_invalidated_from=b+1, changed_positions=changed,
+                 segment_tokens_after=list(tokens[a:b+1]))
     return finish("accepted")
 
 

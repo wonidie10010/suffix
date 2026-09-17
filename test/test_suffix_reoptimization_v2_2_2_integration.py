@@ -84,7 +84,9 @@ class IntegrationTests(unittest.TestCase):
         parsed=cp.config_from_mapping(config)
         resolved=_resolved_suffix_v222_config(types.SimpleNamespace(**config))
         self.assertTrue(parsed.checkpoint_enabled)
-        self.assertEqual(.05,resolved["checkpoint_diagnostic_tolerance"])
+        self.assertEqual(.02,resolved["checkpoint_diagnostic_tolerance"])
+        self.assertEqual("pointwise_logmeanexp", resolved["checkpoint_trigger_metric"])
+        self.assertEqual(3, resolved["checkpoint_schema_version"])
         record=dict(selected_advanced_method=runner.METHOD,selected_candidate_reranking_method="none",
                     accuracy=.8,suffix_reoptimization_v2_2_2_result=dict(pre_acc=.5,post_acc=.8))
         summary=extract_experiment_stage_summary(record)

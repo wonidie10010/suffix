@@ -31,14 +31,23 @@ def checkpoint_offline_evaluation(result, reference_ids, eval_start_pos):
             after = event["new_token_id"] == reference[position]
             item.update(position=position, old_correct=before, new_correct=after,
                         repaired=not before and after, damaged=before and not after)
+            if "segment_tokens_after" in event:
+                segment_before, segment_after = event["segment_tokens_before"], event["segment_tokens_after"]
+                if len(segment_before) != b-a+1 or len(segment_after) != b-a+1:
+                    raise ValueError("offline checkpoint segment alignment mismatch")
+                item["segment_errors_after"] = sum(value != reference[a+i] for i,value in enumerate(segment_after))
+                item["direct_repairs"] = sum(old != reference[a+i] and new == reference[a+i]
+                    for i,(old,new) in enumerate(zip(segment_before,segment_after)))
+                item["direct_damage"] = sum(old == reference[a+i] and new != reference[a+i]
+                    for i,(old,new) in enumerate(zip(segment_before,segment_after)))
         events.append(item)
     return {
         "evaluated_after_online_return": True, "eval_start_pos": eval_start_pos,
         "evaluated_token_count": len(correctness), "correct_token_count": sum(correctness),
         "accuracy": sum(correctness)/len(correctness) if correctness else None,
         "final_correctness": correctness, "checkpoint_events": events,
-        "direct_repairs": sum(bool(e.get("repaired")) for e in events),
-        "direct_damage": sum(bool(e.get("damaged")) for e in events),
+        "direct_repairs": sum(e.get("direct_repairs",int(bool(e.get("repaired")))) for e in events),
+        "direct_damage": sum(e.get("direct_damage",int(bool(e.get("damaged")))) for e in events),
     }
 
 

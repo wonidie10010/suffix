@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standard-library-only preflight and paired Stage-1 snapshot orchestration."""
+"""Standard-library-only preflight and CP-on run with retained Stage-1 snapshots."""
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
@@ -18,16 +18,18 @@ METHOD = "suffix_reoptimization_v2.2.2"
 MODEL_ID = "Qwen/Qwen2.5-1.5B"
 PREFIX = "suffix_v2_2_2_"
 CONFIGS = {label: "experiment_configs/l24_deml3x4_suffix_v2_2_2_cp_{}.json".format(label)
-           for label in ("off", "on")}
+           for label in ("on",)}
 ARTIFACTS = ("resolved_config.json", "experiment.log", "reconstructions.jsonl")
-FROZEN = dict(checkpoint_size=5, checkpoint_stride=5, checkpoint_trigger_cosine=0.90,
-              checkpoint_diagnostic_tolerance=0.05, checkpoint_candidate_min_cosine=0.90,
+FROZEN = dict(checkpoint_size=5, checkpoint_stride=5, checkpoint_trigger_metric="pointwise_logmeanexp",
+              checkpoint_deviation_tau=0.05, checkpoint_trigger_deviation=0.05,
+              checkpoint_diagnostic_tolerance=0.02, checkpoint_candidate_min_cosine=0.90,
               checkpoint_candidate_threshold_source="user_fixed_2026_09_16",
               checkpoint_forward_mode="full_prefix",
               checkpoint_candidate_failure_policy="abort_checkpoint_keep_state",
               checkpoint_tail_policy="skip_incomplete", checkpoint_max_repairs=1,
               checkpoint_recursive=False, checkpoint_numeric_norm_epsilon=1e-8,
-              checkpoint_score_dtype="float32", checkpoint_schema_version=1)
+              checkpoint_score_dtype="float32", checkpoint_schema_version=3,
+              checkpoint_downstream_policy="sequential_rerank_to_checkpoint_end")
 
 
 def load_config(path, stack=()):
@@ -56,16 +58,16 @@ def dump(path, value):
     Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)+"\n", encoding="utf-8")
 
 
-def validate_pair(configs):
-    differences = {key for key in set(configs["off"]) | set(configs["on"])
-                   if configs["off"].get(key) != configs["on"].get(key)}
-    if differences != {PREFIX+"checkpoint_enabled", "output_dir"}:
-        raise ValueError("unexpected paired configuration differences: " + repr(differences))
+def validate_configs(configs):
+    if set(configs) != {"on"}:
+        raise ValueError("this launcher runs only CP-on")
     for label, config in configs.items():
         if config.get("suffix_version") != "v2.2.2" or config.get("suffix_reoptimization_v2_2_2") is not True:
             raise ValueError("v2.2.2 selector/enable required")
         if config.get("cgmr_version") != "none":
-            raise ValueError("paired experiment requires CGMR none")
+            raise ValueError("experiment requires CGMR none")
+        if PREFIX+"checkpoint_trigger_cosine" in config:
+            raise ValueError("obsolete checkpoint trigger setting")
         if config.get(PREFIX+"checkpoint_enabled") is not (label == "on"):
             raise ValueError("wrong checkpoint switch")
         for key, value in FROZEN.items():
@@ -114,7 +116,7 @@ def preflight(project, model_path=None, runtime=None):
         if not (project / required).is_file():
             raise FileNotFoundError(project / required)
     configs = {label: load_config(project / path) for label, path in CONFIGS.items()}
-    validate_pair(configs)
+    validate_configs(configs)
     selected = model_path or os.environ.get("DEML_MODEL_PATH")
     if not selected:
         # Same shared locations as existing launchers; no version-specific cache.
@@ -139,14 +141,14 @@ def preflight(project, model_path=None, runtime=None):
     cache_info=inspect_model_cache(model)
     if cache_info["model_cache_status"]!="hit":
         pending.append("local model: " + str(model)+" missing "+repr(cache_info["missing"]))
-    for dataset in configs["off"]["datasets"]:
+    for dataset in configs["on"]["datasets"]:
         path = Path(dataset["path"])
         if not path.is_absolute():
             path = project / path
         if not path.exists():
             pending.append("dataset: " + str(path))
     return dict(configs=configs, model_path=str(model.resolve()), model_cache=cache_info, pending_server_checks=pending,
-                groups=["cp_off", "cp_on"], stage1="write once; read same snapshots in second group",
+                groups=["cp_on"], stage1="write and retain snapshots in bundle",
                 real_model_loaded=False)
 
 
@@ -239,7 +241,7 @@ def compare_pair(off_records, on_records):
             accepted=ratio(accepted,attempts),
             candidate_failure=ratio(sum(e.get("reason") in ("candidate_forward_failed","invalid_candidate_score") for e in events),attempts),
             hidden_improved_but_token_damaged=ratio(row.get("direct_damage",0),accepted))
-        row["cp_forward_calls"]=sum(e.get("observation_forward_calls",0)+e.get("candidate_forward_calls",0) for e in events)
+        row["cp_forward_calls"]=sum(e.get("observation_forward_calls",0)+e.get("candidate_forward_calls",0)+e.get("downstream_forward_calls",0) for e in events)
         row["cp_forward_token_count"]=sum(e.get("forward_token_count",0) for e in events)
         row["peak_memory_bytes"]=dict(off=before.get("second_stage_peak_memory_bytes"),on=after.get("second_stage_peak_memory_bytes"))
         row["comparable_end_to_end_seconds"]=dict(off=before.get("comparable_end_to_end_seconds"),on=after.get("comparable_end_to_end_seconds"))
@@ -258,6 +260,54 @@ def compare_pair(off_records, on_records):
                 unchanged=sum(row["delta"] == 0 for row in valid), not_applicable=len(rows)-len(valid))
 
 
+def ensure_gpu_idle(gpu, run):
+    result = run(["nvidia-smi", "-i", gpu,
+                  "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
+                 capture_output=True, text=True, check=True)
+    if result.stdout.strip():
+        raise RuntimeError("selected GPU has active compute processes; experiment not started")
+    result = run(["nvidia-smi", "-i", gpu,
+                  "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits"],
+                 capture_output=True, text=True, check=True)
+    utilization, memory = [int(item.strip()) for item in result.stdout.strip().split(",")]
+    if utilization != 0 or memory > 256:
+        raise RuntimeError("selected GPU is not idle; experiment not started")
+
+
+def summarize_on(records):
+    rows = []
+    for record in records:
+        result = record["suffix_reoptimization_v2_2_2_result"]
+        checkpoint = result["checkpoint"]
+        events = checkpoint["events"]
+        offline = record.get("checkpoint_offline_evaluation", {})
+        rows.append(dict(pair_id=result["pair_id"], dataset=record.get("dataset", {}).get("name"),
+            accuracy=record["accuracy"], evaluated_token_count=offline.get("evaluated_token_count", 0),
+            correct_token_count=offline.get("correct_token_count", 0),
+            direct_repairs=offline.get("direct_repairs", 0), direct_damage=offline.get("direct_damage", 0),
+            snapshot_sha256=result["stage1_snapshot_sha256"],
+            complete_windows=checkpoint["complete_segment_count"],
+            valid_windows=sum(e.get("observation_valid") is True for e in events),
+            trigger_count=sum(e.get("triggered") is True for e in events),
+            localizable_count=sum(e.get("selected_position") is not None for e in events),
+            repair_attempt_count=sum(e.get("repair_attempt_count", 0) for e in events),
+            accepted_repair_count=sum(e.get("accepted") is True for e in events),
+            D_win_values=[e["D_win_before"] for e in events if e.get("D_win_before") is not None],
+            score_conflict_count=sum(e.get("accepted") is True and e.get("D_win_after", 0) > e.get("D_win_before", 0) for e in events),
+            reason_counts=dict(Counter(e.get("reason") for e in events)),
+            cp_forward_calls=sum(e.get("observation_forward_calls",0)+e.get("candidate_forward_calls",0)+e.get("downstream_forward_calls",0) for e in events),
+            cp_forward_token_count=sum(e.get("forward_token_count", 0) for e in events),
+            second_stage_seconds=result.get("second_stage_seconds")))
+    def aggregate(items):
+        count = sum(row["evaluated_token_count"] for row in items)
+        valid = [row for row in items if row["accuracy"] is not None]
+        return dict(sample_count=len(items),
+                    macro_accuracy=sum(row["accuracy"] for row in valid)/len(valid) if valid else None,
+                    micro_accuracy=sum(row["correct_token_count"] for row in items)/count if count else None)
+    return dict(samples=rows, accuracy=aggregate(rows),
+                by_dataset={name:aggregate([row for row in rows if row["dataset"] == name]) for name in {row["dataset"] for row in rows}})
+
+
 def run_bundle(project, runtime, result_root, python, model_path=None, smoke=False, run=subprocess.run):
     project, runtime = Path(project).resolve(), Path(runtime).resolve()
     plan = preflight(project, model_path, runtime)
@@ -268,6 +318,7 @@ def run_bundle(project, runtime, result_root, python, model_path=None, smoke=Fal
     gpu = os.environ.get("DEML_GPU_ID", "0")
     if not gpu.isdigit():
         raise ValueError("invalid DEML_GPU_ID")
+    ensure_gpu_idle(gpu, run)
     bundle = Path(result_root).resolve()/tag
     bundle.mkdir(parents=True, exist_ok=False)
     temp_root = project/"outputs"
@@ -282,7 +333,10 @@ def run_bundle(project, runtime, result_root, python, model_path=None, smoke=Fal
     try:
         revision = run(["git", "rev-parse", "HEAD"], cwd=str(project), capture_output=True, text=True, check=True)
         status = run(["git", "status", "--porcelain"], cwd=str(project), capture_output=True, text=True, check=True)
+        diff = run(["git", "diff", "HEAD", "--binary"], cwd=str(project), capture_output=True, text=True, check=True)
         manifest.update(commit=revision.stdout.strip(), worktree_status=status.stdout,
+                        worktree_diff_sha256=hashlib.sha256(diff.stdout.encode()).hexdigest(),
+                        checkpoint_schema_version=FROZEN["checkpoint_schema_version"],
                         model_path=plan["model_path"], model_cache=plan["model_cache"], python=python, gpu=gpu)
         # Pin an unpacked local directory by content when no HF commit metadata exists.
         if not manifest["model_cache"]["model_revision"] and not smoke:
@@ -292,14 +346,13 @@ def run_bundle(project, runtime, result_root, python, model_path=None, smoke=Fal
             manifest["model_cache"]["model_revision"]="local-sha256:"+hashlib.sha256(json.dumps(checksums,sort_keys=True).encode()).hexdigest()
         canonical_root = project/"results/invert_timestamp_runs"
         method_root = canonical_root/METHOD
-        # Alternate which condition writes the shared snapshot across bundles.
-        order = ["on", "off"] if int(tag[-1], 16) % 2 else ["off", "on"]
+        order = ["on"]
         manifest["execution_order"] = order
         for index, label in enumerate(order):
             config = dict(plan["configs"][label])
             config.update(base_model_name=plan["model_path"], log_dir=str(canonical_root),
-                          suffix_v222_snapshot_dir=str(temporary/"snapshots"),
-                          suffix_v222_snapshot_mode="write" if index == 0 else "read",
+                          suffix_v222_snapshot_dir=str(bundle/"snapshots"),
+                          suffix_v222_snapshot_mode="write",
                           suffix_v222_run_kind="smoke" if smoke else "formal")
             expected_count = 12
             if smoke:
@@ -336,9 +389,9 @@ def run_bundle(project, runtime, result_root, python, model_path=None, smoke=Fal
                                              jsonl_bytes=(runs[0]/"reconstructions.jsonl").stat().st_size,
                                              artifacts={name:digest(runs[0]/name) for name in ARTIFACTS})
             dump(bundle/"manifest.json", manifest)
-        summary=compare_pair(records_by_label["off"], records_by_label["on"])
-        dump(bundle/"paired_summary.json", summary)
-        manifest.update(status="complete", pairs=summary["samples"])
+        summary=summarize_on(records_by_label["on"])
+        dump(bundle/"cp_on_summary.json", summary)
+        manifest.update(status="complete", samples=summary["samples"], snapshot_dir=str(bundle/"snapshots"))
     except Exception as error:
         manifest.update(status="failed", errors=[type(error).__name__+": "+str(error)])
         raise
@@ -363,7 +416,6 @@ def main(argv=None):
     try:
         if args.mode == "dry-run":
             plan=preflight(args.project, args.model_path, args.runtime)
-            plan.pop("configs")
             plan.update(result_root=str(Path(args.result_root).resolve()), validation="layout/config only; no real model or experiment")
             print(json.dumps(plan, ensure_ascii=True, indent=2))
         else:

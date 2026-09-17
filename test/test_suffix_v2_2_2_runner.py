@@ -23,6 +23,11 @@ launcher=module("launcher_v222","实验/一键运行_suffix_v2_2_2.py")
 
 
 class RunnerTests(unittest.TestCase):
+    def test_busy_gpu_blocks_before_launch(self):
+        for outputs in (["1234"],["", "10, 0"],["", "0, 1000"]):
+            run=mock.Mock(side_effect=[types.SimpleNamespace(stdout=text) for text in outputs])
+            with self.assertRaises(RuntimeError):runner.ensure_gpu_idle("0",run)
+
     def test_local_cache_completeness_no_network_and_revision(self):
         temp_root=ROOT/"outputs/checkpoint_v222_impl"
         temp_root.mkdir(parents=True,exist_ok=True)
@@ -46,7 +51,10 @@ class RunnerTests(unittest.TestCase):
             code=runner.main(["dry-run","--project",str(ROOT),"--runtime","unused","--result-root","unused",
                               "--model-path",str(ROOT/"outputs/checkpoint_v222_impl/unused_model")])
         self.assertEqual(0,code)
-        self.assertFalse(json.loads(output.getvalue())["real_model_loaded"])
+        plan=json.loads(output.getvalue())
+        self.assertFalse(plan["real_model_loaded"])
+        self.assertEqual(["cp_on"],plan["groups"])
+        self.assertEqual({"on"},set(plan["configs"]))
 
     def test_launcher_forwards_paths_modes_and_exit_code(self):
         fake=mock.Mock(return_value=types.SimpleNamespace(returncode=7))
@@ -63,9 +71,9 @@ class RunnerTests(unittest.TestCase):
 
     def test_pair_config_drift_rejected(self):
         configs={label:runner.load_config(ROOT/path) for label,path in runner.CONFIGS.items()}
-        configs["on"]["lr"]=10
+        configs["on"][runner.PREFIX+"checkpoint_deviation_tau"]=.1
         with self.assertRaises(ValueError):
-            runner.validate_pair(configs)
+            runner.validate_configs(configs)
 
     def test_missing_config_and_include_cycle(self):
         temp_root=ROOT/"outputs/checkpoint_v222_impl"
@@ -87,9 +95,14 @@ class RunnerTests(unittest.TestCase):
                 plan["pending_server_checks"]=[]
                 calls=[]
                 def fake_run(command,**kwargs):
+                    if command[0]=="nvidia-smi":
+                        return types.SimpleNamespace(stdout="" if "--query-compute-apps=pid" in command else "0, 0",returncode=0)
                     if command[0]=="git":return types.SimpleNamespace(stdout="test-revision",returncode=0)
                     config=runner.load_config(command[-1]); calls.append(config)
                     if fail:return types.SimpleNamespace(returncode=9)
+                    snapshots=Path(config["suffix_v222_snapshot_dir"])
+                    snapshots.mkdir(parents=True)
+                    (snapshots/"fixture.pt").write_bytes(b"mock retained snapshot")
                     enabled=config[runner.PREFIX+"checkpoint_enabled"]
                     result=dict(formal_gt_blind=True,gt_accessed=False,pair_id="checkpoint_smoke:0",
                                 stage1_snapshot_sha256="identical",second_stage_seconds=1.,
@@ -112,8 +125,11 @@ class RunnerTests(unittest.TestCase):
                         self.assertEqual(1,len(calls))
                     else:
                         bundle=runner.run_bundle(project,project/"runtime",project/"bundle","python",smoke=True,run=fake_run)
-                        self.assertEqual(["write","read"],[c["suffix_v222_snapshot_mode"] for c in calls])
-                        self.assertEqual(calls[0]["suffix_v222_snapshot_dir"],calls[1]["suffix_v222_snapshot_dir"])
+                        self.assertEqual(["write"],[c["suffix_v222_snapshot_mode"] for c in calls])
+                        self.assertTrue(calls[0][runner.PREFIX+"checkpoint_enabled"])
+                        self.assertTrue((bundle/"snapshots/fixture.pt").is_file())
+                        self.assertTrue((bundle/"cp_on_summary.json").is_file())
+                        self.assertFalse((bundle/"paired_summary.json").exists())
                         self.assertEqual("complete",json.loads((bundle/"manifest.json").read_text())["status"])
                 self.assertEqual([],list((project/"outputs").iterdir()))
 

@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -22,13 +23,16 @@ CONFIGS = {label: "experiment_configs/l24_deml3x4_suffix_v2_2_2_cp_{}.json".form
 ARTIFACTS = ("resolved_config.json", "experiment.log", "reconstructions.jsonl")
 FROZEN = dict(checkpoint_size=5, checkpoint_stride=5, checkpoint_trigger_metric="pointwise_logmeanexp",
               checkpoint_deviation_tau=0.05, checkpoint_trigger_deviation=0.05,
-              checkpoint_diagnostic_tolerance=0.02, checkpoint_candidate_min_cosine=0.90,
-              checkpoint_candidate_threshold_source="user_fixed_2026_09_16",
+              checkpoint_diagnostic_tolerance=0.02, checkpoint_candidate_top_k=3,
+              checkpoint_candidate_policy="stable_top_k_alternatives",
+              checkpoint_acceptance_metric="pointwise_logmeanexp",
+              checkpoint_acceptance_epsilon_source="per_window_repeated_forward_range",
+              checkpoint_acceptance_calibration_repeats=3,
               checkpoint_forward_mode="full_prefix",
               checkpoint_candidate_failure_policy="abort_checkpoint_keep_state",
               checkpoint_tail_policy="skip_incomplete", checkpoint_max_repairs=1,
               checkpoint_recursive=False, checkpoint_numeric_norm_epsilon=1e-8,
-              checkpoint_score_dtype="float32", checkpoint_schema_version=3,
+              checkpoint_score_dtype="float32", checkpoint_schema_version=4,
               checkpoint_downstream_policy="sequential_rerank_to_checkpoint_end")
 
 
@@ -66,8 +70,9 @@ def validate_configs(configs):
             raise ValueError("v2.2.2 selector/enable required")
         if config.get("cgmr_version") != "none":
             raise ValueError("experiment requires CGMR none")
-        if PREFIX+"checkpoint_trigger_cosine" in config:
-            raise ValueError("obsolete checkpoint trigger setting")
+        if any(PREFIX+key in config for key in ("checkpoint_trigger_cosine",
+                "checkpoint_candidate_min_cosine", "checkpoint_candidate_threshold_source")):
+            raise ValueError("obsolete checkpoint setting; migrate to schema 4")
         if config.get(PREFIX+"checkpoint_enabled") is not (label == "on"):
             raise ValueError("wrong checkpoint switch")
         for key, value in FROZEN.items():
@@ -183,9 +188,42 @@ def read_artifacts(run_dir, enabled, expected_count):
         expected_events = checkpoint["complete_segment_count"] if enabled else 0
         if len(checkpoint["events"]) != expected_events:
             raise ValueError("incomplete checkpoint events")
+        for event in checkpoint["events"]:
+            validate_checkpoint_event(event)
     if len(set(keys)) != len(keys):
         raise ValueError("duplicate sample identity")
     return records
+
+
+def validate_checkpoint_event(event):
+    for field, expected in (("schema_version", FROZEN["checkpoint_schema_version"]),
+                            ("candidate_top_k", FROZEN["checkpoint_candidate_top_k"]),
+                            ("acceptance_metric", FROZEN["checkpoint_acceptance_metric"]),
+                            ("acceptance_epsilon_source", FROZEN["checkpoint_acceptance_epsilon_source"]),
+                            ("acceptance_calibration_repeats", FROZEN["checkpoint_acceptance_calibration_repeats"])):
+        if type(event.get(field)) is not type(expected) or event[field] != expected:
+            raise ValueError("checkpoint event contract mismatch: " + field)
+    if event.get("repair_attempt_count", 0) or event.get("accepted"):
+        scores = event.get("acceptance_calibration_scores", [])
+        epsilon = event.get("acceptance_epsilon")
+        before, after = event.get("D_win_before"), event.get("D_win_after")
+        def finite(value):
+            return type(value) in (int, float) and math.isfinite(value)
+        if (len(scores) != FROZEN["checkpoint_acceptance_calibration_repeats"]
+                or not all(finite(v) for v in scores) or not finite(epsilon) or epsilon < 0
+                or not finite(before) or not finite(after)
+                or epsilon != max(scores)-min(scores)
+                or scores[0] != before
+                or event.get("acceptance_threshold") != before-epsilon):
+            raise ValueError("invalid checkpoint acceptance calibration")
+        if event.get("accepted") and (not event.get("all_candidates_scored") or not after < before-epsilon):
+            raise ValueError("accepted checkpoint violates D_win acceptance")
+
+
+def checkpoint_forward_calls(events):
+    return sum(sum(event.get(key, 0) for key in (
+        "observation_forward_calls", "calibration_forward_calls",
+        "candidate_forward_calls", "downstream_forward_calls")) for event in events)
 
 
 def compare_pair(off_records, on_records):
@@ -241,7 +279,7 @@ def compare_pair(off_records, on_records):
             accepted=ratio(accepted,attempts),
             candidate_failure=ratio(sum(e.get("reason") in ("candidate_forward_failed","invalid_candidate_score") for e in events),attempts),
             hidden_improved_but_token_damaged=ratio(row.get("direct_damage",0),accepted))
-        row["cp_forward_calls"]=sum(e.get("observation_forward_calls",0)+e.get("candidate_forward_calls",0)+e.get("downstream_forward_calls",0) for e in events)
+        row["cp_forward_calls"]=checkpoint_forward_calls(events)
         row["cp_forward_token_count"]=sum(e.get("forward_token_count",0) for e in events)
         row["peak_memory_bytes"]=dict(off=before.get("second_stage_peak_memory_bytes"),on=after.get("second_stage_peak_memory_bytes"))
         row["comparable_end_to_end_seconds"]=dict(off=before.get("comparable_end_to_end_seconds"),on=after.get("comparable_end_to_end_seconds"))
@@ -293,9 +331,13 @@ def summarize_on(records):
             repair_attempt_count=sum(e.get("repair_attempt_count", 0) for e in events),
             accepted_repair_count=sum(e.get("accepted") is True for e in events),
             D_win_values=[e["D_win_before"] for e in events if e.get("D_win_before") is not None],
+            acceptance_epsilon_values=[e["acceptance_epsilon"] for e in events if e.get("acceptance_epsilon") is not None],
+            calibration_forward_calls=sum(e.get("calibration_forward_calls", 0) for e in events),
+            calibration_failure_count=sum(e.get("reason") in (
+                "acceptance_calibration_failed", "invalid_acceptance_calibration") for e in events),
             score_conflict_count=sum(e.get("accepted") is True and e.get("D_win_after", 0) > e.get("D_win_before", 0) for e in events),
             reason_counts=dict(Counter(e.get("reason") for e in events)),
-            cp_forward_calls=sum(e.get("observation_forward_calls",0)+e.get("candidate_forward_calls",0)+e.get("downstream_forward_calls",0) for e in events),
+            cp_forward_calls=checkpoint_forward_calls(events),
             cp_forward_token_count=sum(e.get("forward_token_count", 0) for e in events),
             second_stage_seconds=result.get("second_stage_seconds")))
     def aggregate(items):

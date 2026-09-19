@@ -86,7 +86,10 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(parsed.checkpoint_enabled)
         self.assertEqual(.02,resolved["checkpoint_diagnostic_tolerance"])
         self.assertEqual("pointwise_logmeanexp", resolved["checkpoint_trigger_metric"])
-        self.assertEqual(3, resolved["checkpoint_schema_version"])
+        self.assertEqual(4, resolved["checkpoint_schema_version"])
+        self.assertEqual(3, resolved["checkpoint_candidate_top_k"])
+        self.assertEqual("per_window_repeated_forward_range", resolved["checkpoint_acceptance_epsilon_source"])
+        self.assertIn("D_win_decreases", resolved["checkpoint_acceptance"])
         record=dict(selected_advanced_method=runner.METHOD,selected_candidate_reranking_method="none",
                     accuracy=.8,suffix_reoptimization_v2_2_2_result=dict(pre_acc=.5,post_acc=.8))
         summary=extract_experiment_stage_summary(record)

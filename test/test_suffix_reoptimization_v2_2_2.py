@@ -17,6 +17,13 @@ from test.test_suffix_reoptimization_v2_2_1 import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REAL_WINDOW_OBSERVATION = cp.window_observation
+
+
+def observation(score, invalid_reason=None):
+    return dict(D_win=score, invalid_reason=invalid_reason, pointwise_cosine=[.8]*5,
+                pointwise_deviation=[score]*5 if score is not None else None,
+                current_norms=[1.]*5, target_norms=[1.]*5)
 
 
 class Model(_Model):
@@ -49,7 +56,8 @@ def fixture(length=11, prefix=1, **config):
 
 class ContractTests(unittest.TestCase):
     def test_fixed_parameters_reject_changes(self):
-        for field, value in (("checkpoint_diagnostic_tolerance", .01), ("checkpoint_candidate_min_cosine", .89),
+        for field, value in (("checkpoint_diagnostic_tolerance", .01), ("checkpoint_candidate_top_k", 4),
+                             ("checkpoint_acceptance_calibration_repeats", 1), ("checkpoint_schema_version", 3),
                              ("checkpoint_forward_mode", "cached_prefix"), ("checkpoint_max_repairs", True)):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 cp.SuffixReoptimizationV222Config(**{field:value})
@@ -116,17 +124,17 @@ class ContractTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
-    def test_trajectory_cases(self):
-        cases=[([.98,.86,.96,.82,.81],3),([.88,.76,.87,.87,.86],1),
-               ([.98,.95,.92,.89,.80],None),([.85]*5,None),([.97,.84,.86,.88,.89],1),
-               ([.95,.8,.82,.83,.94],None)]
-        for values,position in cases:
-            self.assertEqual(position,cp.diagnose_segment(values)["selected_position"])
+    def test_pointwise_cases_include_first_and_last_position(self):
+        cases=[([.4049,.2618,.3775,.1596,.1602],.3495,0),
+               ([.01,.02,.03,.04,.2],.15,4),([.1]*5,.1,0)]
+        for values,score,position in cases:
+            self.assertEqual(position+7,cp.diagnose_segment(values,score,start=7)["selected_position"])
 
     def test_exact_diagnostic_boundaries(self):
         # Binary-exact tolerance isolates the comparator from decimal rounding.
-        self.assertIsNone(cp.diagnose_segment([1,.875,.875,.875,.875],eta=.125)["selected_position"])
-        self.assertEqual("isolated_drop",cp.diagnose_segment([1,.75,.875,.875,.875],eta=.125)["diagnosis_type"])
+        self.assertEqual(1,cp.diagnose_segment([.25,.375,.5],.5,eta=.125)["selected_position"])
+        for values,score in (([],.1),([float('nan')],.1),([.1],float('inf'))):
+            with self.assertRaises(ValueError):cp.diagnose_segment(values,score)
 
     def test_sum_cosine_is_not_mean_cosine(self):
         a=torch.tensor([[[10.,0.],[0.,1.]]])
@@ -134,12 +142,14 @@ class DiagnosticTests(unittest.TestCase):
         self.assertGreater(cp.segment_cosine(a,b),.9)
         self.assertIsNone(cp.segment_cosine(torch.zeros_like(a),b))
 
-    def test_threshold_filter_duplicates_and_current_retention(self):
-        table=dict(candidate_token_ids=[0,1,2,2,3,4,5],candidate_hidden_cosine=[1.,.899,.9,.95,float('nan'),.99,.92])
-        ids,excluded,mapping=cp.filter_existing_candidates(table,4,Tokenizer(),12,True,.9)
-        self.assertEqual([2,5],ids)
+    def test_rank_filter_duplicates_ties_and_low_scores(self):
+        table=dict(candidate_token_ids=[0,1,2,2,3,4,5,6,7],candidate_hidden_cosine=[1.,.3,.4,.95,float('nan'),.99,.4,.2,.1])
+        ids,excluded,mapping=cp.filter_existing_candidates(table,4,Tokenizer(),12,True,3)
+        self.assertEqual([2,5,1],ids)
         self.assertEqual(mapping[2],mapping[3])
         self.assertIn("nonfinite_old_score",[e["reason"] for e in excluded])
+        self.assertIn("outside_top_k",[e["reason"] for e in excluded])
+        self.assertNotIn(4,ids)
 
 
 class DeviationTests(unittest.TestCase):
@@ -176,40 +186,40 @@ class DeviationTests(unittest.TestCase):
         self.assertAlmostEqual(1.,event["group_cosine_before"])
         self.assertTrue(event["triggered"])
         self.assertGreater(event["D_win_before"],.05)
-        self.assertEqual(.02,diagnose.call_args.args[1])
+        self.assertEqual(.02,diagnose.call_args.args[2])
         self.assertEqual(event["D_win_before"],event["D_win_after"])
 
     def test_trigger_boundary_and_invalid_state_no_mutation(self):
-        for score,reason in ((float(torch.tensor(.05)),"passed"),(.051,"no_localizable_drop"),(None,"invalid_segment_observation")):
+        for score,reason in ((float(torch.tensor(.05)),"passed"),(.051,"no_localizable_deviation"),(None,"invalid_segment_observation")):
             args=TransactionTests().setup_trial(); tokens=list(args[2]); embedding=args[3].clone()
-            with mock.patch.object(cp,"window_observation",return_value=dict(D_win=score,invalid_reason="zero_norm" if score is None else None)), \
+            with mock.patch.object(cp,"window_observation",return_value=observation(score,"zero_norm" if score is None else None)), \
                  mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=None)):
                 event=cp.run_checkpoint(*args)
             self.assertEqual(reason,event["reason"])
             self.assertEqual(tokens,args[2]); self.assertTrue(torch.equal(embedding,args[3]))
 
-    def test_acceptance_keeps_old_metric_even_if_deviation_worsens(self):
+    def test_acceptance_ranks_deviation_despite_better_sum_cosine(self):
         args=TransactionTests().setup_trial()
         with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
-             mock.patch.object(cp,"segment_cosine",side_effect=[.8]+[.8]*5+[.81,.86]), \
-             mock.patch.object(cp,"window_observation",side_effect=[dict(D_win=d,invalid_reason=None) for d in (.1,.09,.2)]):
+             mock.patch.object(cp,"segment_cosine",side_effect=[.8,.81,.86]), \
+             mock.patch.object(cp,"window_observation",side_effect=[observation(d) for d in (.1,.1,.1,.09,.2)]):
             event=cp.run_checkpoint(*args,downstream_rerank=TransactionTests.keep_downstream)
         self.assertTrue(event["accepted"])
-        self.assertEqual(9,event["new_token_id"])
-        self.assertEqual(.2,event["D_win_after"])
-        self.assertEqual(.86,event["group_cosine_after"])
+        self.assertEqual(8,event["new_token_id"])
+        self.assertEqual(.09,event["D_win_after"])
+        self.assertEqual(.81,event["group_cosine_after"])
 
     def test_old_config_not_silently_accepted(self):
-        with self.assertRaisesRegex(ValueError,"obsolete"):
-            cp.config_from_mapping({"suffix_v2_2_2_checkpoint_trigger_cosine":.9},require_explicit=False)
+        for key in ("checkpoint_trigger_cosine", "checkpoint_candidate_min_cosine",
+                    "checkpoint_candidate_threshold_source"):
+            with self.assertRaisesRegex(ValueError,"obsolete"):
+                cp.config_from_mapping({"suffix_v2_2_2_"+key:.9},require_explicit=False)
 
 
 class TransactionTests(unittest.TestCase):
     def setUp(self):
         # Control trigger separately from the synthetic transaction geometry.
-        patcher = mock.patch.object(cp, "window_observation", return_value=dict(
-            D_win=.1, invalid_reason=None, pointwise_cosine=[.8]*5,
-            pointwise_deviation=[.1]*5, current_norms=[1.]*5, target_norms=[1.]*5))
+        patcher = mock.patch.object(cp, "window_observation", return_value=observation(.1))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -223,6 +233,66 @@ class TransactionTests(unittest.TestCase):
     def test_contract_errors_are_fatal(self):
         with self.assertRaises(cp.CheckpointContractError):
             cp.raise_if_fatal(cp.CheckpointContractError("wrong exact-layer shape"))
+
+    def test_calibrated_margin_boundary_and_tie_order(self):
+        # Binary-exact scores: epsilon=.03125, acceptance cutoff=.21875.
+        for trial_score,accepted in ((.21875,False),(.234375,False),(.1875,True)):
+            args=self.setup_trial(); tokens=list(args[2]); tables=copy.deepcopy(args[9]); embedding=args[3].clone()
+            with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
+                 mock.patch.object(cp,"window_observation",side_effect=[observation(d) for d in (
+                     .25,.28125,.25,trial_score,trial_score)]), \
+                 mock.patch.object(cp,"segment_cosine",return_value=None):
+                event=cp.run_checkpoint(*args,downstream_rerank=self.keep_downstream)
+            self.assertEqual(.03125,event["acceptance_epsilon"])
+            self.assertEqual(.21875,event["acceptance_threshold"])
+            self.assertEqual(2,event["calibration_forward_calls"])
+            self.assertEqual(accepted,event["accepted"])
+            self.assertEqual(.03125,event["effective_acceptance_config"]["epsilon"])
+            if accepted:
+                self.assertEqual(8,event["new_token_id"])
+                self.assertIsNone(event["group_cosine_after"])
+                self.assertEqual([trial_score-.25]*5,event["pointwise_deviation_change"])
+            else:
+                self.assertEqual(tokens,args[2]); self.assertEqual(tables,args[9])
+                self.assertTrue(torch.equal(embedding,args[3]))
+            json.dumps(event,allow_nan=False)
+
+    def test_calibration_failure_keeps_all_state(self):
+        for invalid in (False,True):
+            args=self.setup_trial(); tokens=list(args[2]); tables=copy.deepcopy(args[9]); embedding=args[3].clone()
+            observations=[observation(.1),observation(None,"zero_norm")] if invalid else [observation(.1)]
+            forwards=[args[4],args[4]] if invalid else [args[4],RuntimeError("repeat failed")]
+            with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
+                 mock.patch.object(cp,"window_observation",side_effect=observations), \
+                 mock.patch.object(cp,"forward_discrete",side_effect=forwards):
+                event=cp.run_checkpoint(*args,downstream_rerank=self.keep_downstream)
+            self.assertEqual("invalid_acceptance_calibration" if invalid else "acceptance_calibration_failed",event["reason"])
+            self.assertEqual(0,event["candidate_forward_calls"])
+            self.assertEqual(tokens,args[2]); self.assertEqual(tables,args[9])
+            self.assertTrue(torch.equal(embedding,args[3]))
+
+    def test_no_alternatives_skips_calibration(self):
+        args=self.setup_trial()
+        args[9][2].update(candidate_token_ids=[4],candidate_hidden_cosine=[.2])
+        with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)):
+            event=cp.run_checkpoint(*args)
+        self.assertEqual("no_eligible_alternative",event["reason"])
+        self.assertEqual(0,event["calibration_forward_calls"])
+
+    def test_real_first_position_repair(self):
+        args=list(self.setup_trial()); args[9]={}
+        args[9][1]=dict(candidate_token_ids=[8],candidate_hidden_cosine=[.2],
+                       prefix_fingerprint=cp.prefix_fingerprint(args[2][:1]),generation=0)
+        target=torch.tensor([[[1.,0.,0.,0.]]*6]); before=target.clone()
+        before[0,1]=torch.tensor([-1.,0.,0.,0.]); args[4]=target
+        # Real pointwise observation/localization; only discrete forwards are controlled.
+        with mock.patch.object(cp,"forward_discrete",side_effect=[before]*3+[target]), \
+             mock.patch.object(cp,"window_observation",side_effect=REAL_WINDOW_OBSERVATION):
+            event=cp.run_checkpoint(*args,downstream_rerank=self.keep_downstream)
+        self.assertEqual(1,event["selected_position"])
+        self.assertTrue(event["accepted"])
+        self.assertEqual(8,args[2][1])
+        self.assertAlmostEqual(0.,event["D_win_after"])
 
     def test_tuple_hook_extracts_hidden_only(self):
         kwargs=fixture(6)
@@ -240,7 +310,7 @@ class TransactionTests(unittest.TestCase):
     def setup_trial(self):
         kwargs=fixture(6)
         tokens=[0,3,4,5,6,7]
-        table={2:dict(candidate_token_ids=[4,8,9],candidate_hidden_cosine=[.99,.9,.95],
+        table={2:dict(candidate_token_ids=[4,8,9],candidate_hidden_cosine=[.99,.45,.4],
                       prefix_fingerprint=cp.prefix_fingerprint(tokens[:2]),generation=0)}
         args=(kwargs["model"],kwargs["embed_layer"],tokens,kwargs["optimized_embedding"],
               kwargs["target_hidden_state"],0,_register_layer_hooks,Tokenizer(),kwargs["config"],table,1,5,1)
@@ -250,8 +320,9 @@ class TransactionTests(unittest.TestCase):
         args=self.setup_trial()
         original=list(args[2]); embedding=args[3].clone()
         with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
-             mock.patch.object(cp,"segment_cosine",side_effect=[.8]+[.8]*5+[.95]), \
-             mock.patch.object(cp,"forward_discrete",side_effect=[args[4],args[4],RuntimeError("trial failed")]):
+             mock.patch.object(cp,"segment_cosine",side_effect=[.8,.95]), \
+             mock.patch.object(cp,"window_observation",side_effect=[observation(d) for d in (.1,.1,.1,.05)]), \
+             mock.patch.object(cp,"forward_discrete",side_effect=[args[4]]*4+[RuntimeError("trial failed")]):
             event=cp.run_checkpoint(*args, downstream_rerank=self.keep_downstream)
         self.assertEqual("candidate_forward_failed",event["reason"])
         self.assertEqual(original,args[2]); self.assertTrue(torch.equal(embedding,args[3]))
@@ -260,7 +331,8 @@ class TransactionTests(unittest.TestCase):
     def test_best_later_candidate_commits_only_one_id(self):
         args=self.setup_trial(); original=list(args[2]); old_embedding=args[3].clone()
         with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
-             mock.patch.object(cp,"segment_cosine",side_effect=[.8]+[.8]*5+[.81,.86]):
+             mock.patch.object(cp,"segment_cosine",side_effect=[.8,.81,.86]), \
+             mock.patch.object(cp,"window_observation",side_effect=[observation(d) for d in (.1,.1,.1,.09,.08)]):
             event=cp.run_checkpoint(*args, downstream_rerank=self.keep_downstream)
         self.assertEqual("accepted",event["reason"])
         self.assertEqual(9,args[2][2]); self.assertEqual(1,event["repair_attempt_count"])
@@ -288,7 +360,8 @@ class TransactionTests(unittest.TestCase):
     def test_downstream_reselects_sequentially_and_commits_winning_path(self):
         args=self.setup_trial(); original=list(args[2]); old_embedding=args[3].clone(); seen=[]
         with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
-             mock.patch.object(cp,"segment_cosine",side_effect=[.8]+[.8]*5+[.81,.86]):
+             mock.patch.object(cp,"segment_cosine",side_effect=[.8,.81,.86]), \
+             mock.patch.object(cp,"window_observation",side_effect=[observation(d) for d in (.1,.1,.1,.09,.08)]):
             event=cp.run_checkpoint(*args,downstream_rerank=self.adaptive_rerank(args,seen))
         self.assertEqual([0,3,9,6,5,6],args[2])
         self.assertEqual([original[3:],original[3:]],[s[3:] for s in seen])
@@ -301,7 +374,7 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual(args[2][j],args[9][j]["selected_token_id"])
         self.assertEqual([2,3,4,5],event["changed_positions"])
         self.assertEqual(6,event["downstream_forward_calls"])
-        self.assertEqual(90,event["forward_token_count"])
+        self.assertEqual(102,event["forward_token_count"])
         json.dumps(event,allow_nan=False)
 
     def test_adapted_path_rejection_and_partial_failure_leave_all_state_untouched(self):
@@ -312,9 +385,11 @@ class TransactionTests(unittest.TestCase):
                 if failure and trial[2]==9:
                     raise RuntimeError("downstream forward failed")
                 return rerank(trial,begin,end,stats)
-            scores=[.8]+[.8]*5+([.95] if failure else [.8,.79])
+            scores=[.8]+([.95] if failure else [.8,.79])
             with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
-                 mock.patch.object(cp,"segment_cosine",side_effect=scores):
+                 mock.patch.object(cp,"segment_cosine",side_effect=scores), \
+                 mock.patch.object(cp,"window_observation",side_effect=[observation(d) for d in (
+                     (.1,.1,.1,.05) if failure else (.1,.1,.1,.1,.11))]):
                 event=cp.run_checkpoint(*args,downstream_rerank=maybe_fail)
             self.assertEqual("candidate_forward_failed" if failure else "no_improvement",event["reason"])
             self.assertEqual(tokens,args[2]); self.assertEqual(tables,args[9])
@@ -342,10 +417,11 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(1,report["checkpoint_events"][0]["segment_errors_after"])
 
     def test_invalid_candidate_and_equal_score_do_not_commit(self):
-        for score,reason in ((None,"invalid_candidate_score"),(.8,"no_improvement")):
+        for score,reason in ((None,"invalid_candidate_score"),(.1,"no_improvement")):
             args=self.setup_trial(); original=list(args[2])
             with mock.patch.object(cp,"diagnose_segment",return_value=dict(selected_position=2)), \
-                 mock.patch.object(cp,"segment_cosine",side_effect=[.8]+[.8]*5+[score,score]):
+                 mock.patch.object(cp,"window_observation",side_effect=[observation(.1)]*3+[
+                     observation(score,"invalid" if score is None else None)]*2):
                 event=cp.run_checkpoint(*args, downstream_rerank=self.keep_downstream)
             self.assertEqual(reason,event["reason"]); self.assertEqual(original,args[2])
 

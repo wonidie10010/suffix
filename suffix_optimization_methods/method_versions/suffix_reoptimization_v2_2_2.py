@@ -57,8 +57,11 @@ class SuffixReoptimizationV222Config:
     checkpoint_deviation_tau: float = 0.05
     checkpoint_trigger_deviation: float = 0.05
     checkpoint_diagnostic_tolerance: float = 0.02
-    checkpoint_candidate_min_cosine: float = 0.90
-    checkpoint_candidate_threshold_source: str = "user_fixed_2026_09_16"
+    checkpoint_candidate_top_k: int = 3
+    checkpoint_candidate_policy: str = "stable_top_k_alternatives"
+    checkpoint_acceptance_metric: str = "pointwise_logmeanexp"
+    checkpoint_acceptance_epsilon_source: str = "per_window_repeated_forward_range"
+    checkpoint_acceptance_calibration_repeats: int = 3
     checkpoint_forward_mode: str = "full_prefix"
     checkpoint_candidate_failure_policy: str = "abort_checkpoint_keep_state"
     checkpoint_tail_policy: str = "skip_incomplete"
@@ -66,7 +69,7 @@ class SuffixReoptimizationV222Config:
     checkpoint_recursive: bool = False
     checkpoint_numeric_norm_epsilon: float = 1e-8
     checkpoint_score_dtype: str = "float32"
-    checkpoint_schema_version: int = 3
+    checkpoint_schema_version: int = 4
     checkpoint_downstream_policy: str = "sequential_rerank_to_checkpoint_end"
 
     def __post_init__(self):
@@ -934,21 +937,24 @@ run_suffix_reoptimization = run_suffix_reoptimization_v2_2_2
 
 
 def validate_checkpoint_config(config):
-    """Frozen first-release CP contract; no silent defaults at config boundary."""
+    """Explicit in-place checkpoint revision; old schemas cannot run silently."""
     expected = {
         "checkpoint_size": 5, "checkpoint_stride": 5,
         "checkpoint_trigger_metric": "pointwise_logmeanexp",
         "checkpoint_deviation_tau": 0.05,
         "checkpoint_trigger_deviation": 0.05,
         "checkpoint_diagnostic_tolerance": 0.02,
-        "checkpoint_candidate_min_cosine": 0.90,
-        "checkpoint_candidate_threshold_source": "user_fixed_2026_09_16",
+        "checkpoint_candidate_top_k": 3,
+        "checkpoint_candidate_policy": "stable_top_k_alternatives",
+        "checkpoint_acceptance_metric": "pointwise_logmeanexp",
+        "checkpoint_acceptance_epsilon_source": "per_window_repeated_forward_range",
+        "checkpoint_acceptance_calibration_repeats": 3,
         "checkpoint_forward_mode": "full_prefix",
         "checkpoint_candidate_failure_policy": "abort_checkpoint_keep_state",
         "checkpoint_tail_policy": "skip_incomplete",
         "checkpoint_max_repairs": 1, "checkpoint_recursive": False,
         "checkpoint_numeric_norm_epsilon": 1e-8,
-        "checkpoint_score_dtype": "float32", "checkpoint_schema_version": 3,
+        "checkpoint_score_dtype": "float32", "checkpoint_schema_version": 4,
         "checkpoint_downstream_policy": "sequential_rerank_to_checkpoint_end",
     }
     if type(config.checkpoint_enabled) is not bool:
@@ -962,8 +968,10 @@ def validate_checkpoint_config(config):
 def config_from_mapping(values, require_explicit=True):
     from dataclasses import fields
     parsed = {}
-    if "suffix_v2_2_2_checkpoint_trigger_cosine" in values:
-        raise ValueError("obsolete checkpoint_trigger_cosine; migrate to explicit schema 3 deviation settings")
+    for obsolete in ("checkpoint_trigger_cosine", "checkpoint_candidate_min_cosine",
+                     "checkpoint_candidate_threshold_source"):
+        if "suffix_v2_2_2_" + obsolete in values:
+            raise ValueError("obsolete " + obsolete + "; migrate to explicit schema 4 settings")
     for field in fields(SuffixReoptimizationV222Config):
         key = {"enabled": "suffix_reoptimization_v2_2_2",
                "log_enabled": "suffix_reoptimization_v2_2_2_log"}.get(
@@ -1072,55 +1080,48 @@ def window_observation(current, target, tau=0.05, epsilon=1e-8):
     return result
 
 
-def diagnose_segment(cumulative, eta=0.05, start=0):
-    """Pure trajectory rule. No fallback to a low individual token score."""
-    deltas = [None] + [cumulative[i] - cumulative[i-1] for i in range(1, 5)]
-    isolated, sustained = [], []
-    for i in range(1, 5):
-        if deltas[i] >= -eta:
-            continue
-        recovery = next((j for j in range(i+1, 5) if cumulative[j] >= cumulative[i-1]-eta), None)
-        event = dict(selected_position=start+i, drop_baseline=cumulative[i-1],
-                     recovery_position=None if recovery is None else start+recovery,
-                     followup_count=4-i, drop=deltas[i])
-        if recovery is not None and recovery-i <= 2:
-            isolated.append(event)
-        elif recovery is None and i < 4:
-            sustained.append(event)
-    selected = sustained[0] if sustained else min(isolated, key=lambda e: (e["drop"], e["selected_position"]), default=None)
-    result = dict(deltas=deltas, selected_position=None, diagnosis_type=None)
-    if selected:
-        result.update(selected)
-        result["diagnosis_type"] = "sustained_drop" if sustained else "isolated_drop"
-    return result
+def diagnose_segment(deviation, D_win, eta=0.02, start=0):
+    """Earliest position above the relative deviation cutoff, not a token oracle."""
+    if (not deviation or not all(math.isfinite(v) for v in deviation)
+            or not math.isfinite(D_win) or not math.isfinite(eta) or eta < 0):
+        raise ValueError("localization requires finite observations and nonnegative tolerance")
+    cutoff = D_win - eta
+    position = next((start+i for i, value in enumerate(deviation) if value >= cutoff), None)
+    return dict(selected_position=position, localization_threshold=cutoff,
+                diagnosis_type="earliest_relative_deviation" if position is not None else None)
 
 
-def filter_existing_candidates(table, current_id, tokenizer, vocab_size, filter_nonascii, threshold):
+def filter_existing_candidates(table, current_id, tokenizer, vocab_size, filter_nonascii, top_k):
     ids, scores = table["candidate_token_ids"], table["candidate_hidden_cosine"]
     if len(ids) != len(scores):
         raise ValueError("candidate rows do not align")
-    eligible, excluded, mapping = [], [], []
+    eligible, excluded, mapping = [], [], [None] * len(ids)
+    valid_rows, unique = [], {}
     for row, (token, score) in enumerate(zip(ids, scores)):
         reason = None
-        if not isinstance(token, int) or not 0 <= token < vocab_size:
+        if type(token) is not int or not 0 <= token < vocab_size:
             reason = "invalid_id"
         elif token in tokenizer.all_special_ids:
             reason = "special_token"
         elif filter_nonascii and not tokenizer.decode([token]).isascii():
             reason = "nonascii"
-        elif not isinstance(score, numbers.Real) or not math.isfinite(score):
+        elif isinstance(score, bool) or not isinstance(score, numbers.Real) or not math.isfinite(score):
             reason = "nonfinite_old_score"
-        elif score < threshold:
-            reason = "below_threshold"
         elif token == current_id:
             reason = "current_token"
         if reason:
             excluded.append({"row": row, "token_id": token, "reason": reason})
-            mapping.append(None)
         else:
-            if token not in eligible:
-                eligible.append(token)
-            mapping.append(eligible.index(token))
+            valid_rows.append((row, token))
+            # First valid occurrence defines both the deduplicated score and tie order.
+            unique.setdefault(token, float(score))
+    eligible = sorted(unique, key=lambda token: -unique[token])[:top_k]
+    selected = {token: index for index, token in enumerate(eligible)}
+    for row, token in valid_rows:
+        mapping[row] = selected.get(token)
+        if token not in selected:
+            excluded.append(dict(row=row, token_id=token, reason="outside_top_k"))
+    excluded.sort(key=lambda item: item["row"])
     return eligible, excluded, mapping
 
 
@@ -1133,9 +1134,9 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
     event = dict(checkpoint_id=(a-start)//5, a=a, b=b, eval_start_pos=start,
                  position_index_base=0, target_block_index=layer_id,
                  group_cosine_before=None, group_cosine_after=None, triggered=None,
-                 cumulative_cosine=None, deltas=None, eta=config.checkpoint_diagnostic_tolerance,
-                 selected_position=None, diagnosis_type=None, drop_baseline=None,
-                 recovery_position=None, followup_count=None, candidate_generation=None,
+                 eta=config.checkpoint_diagnostic_tolerance,
+                 selected_position=None, diagnosis_type=None, localization_threshold=None,
+                 candidate_generation=None,
                  prefix_fingerprint=None, original_candidate_ids=[], original_candidate_scores=[],
                  eligible_ids=[], excluded_reasons=[], duplicate_mapping=[], evaluated_ids=[],
                  candidate_group_cosines=[], failed_id=None, unevaluated_ids=[],
@@ -1144,8 +1145,8 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
                  committed_end_before=b, committed_end_after=b,
                  future_context_invalidated_from=None, forward_mode="full_prefix",
                  observation_forward_calls=0, candidate_forward_calls=0, forward_token_count=0,
-                 candidate_min_cosine=config.checkpoint_candidate_min_cosine,
-                 candidate_threshold_source=config.checkpoint_candidate_threshold_source,
+                 candidate_top_k=config.checkpoint_candidate_top_k,
+                 candidate_policy=config.checkpoint_candidate_policy,
                  segment_tokens_before=list(tokens[a:b+1]))
     event.update(downstream_policy=config.checkpoint_downstream_policy,
                  schema_version=config.checkpoint_schema_version,
@@ -1154,6 +1155,13 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
                  trigger_deviation=config.checkpoint_trigger_deviation,
                  is_first_window=a == start, observation_valid=False,
                  D_win_before=None, D_win_after=None,
+                 acceptance_metric=config.checkpoint_acceptance_metric,
+                 acceptance_epsilon_source=config.checkpoint_acceptance_epsilon_source,
+                 acceptance_calibration_repeats=config.checkpoint_acceptance_calibration_repeats,
+                 acceptance_calibration_scores=[], acceptance_epsilon=None, acceptance_threshold=None,
+                 effective_acceptance_config=None,
+                 calibration_forward_calls=0, best_D_win=None,
+                 pointwise_deviation_after=None, pointwise_deviation_change=None,
                  candidate_paths=[], segment_tokens_after=list(tokens[a:b+1]),
                  changed_positions=[], downstream_forward_calls=0, downstream_rerank_positions=0,
                  downstream_candidate_sequences=0)
@@ -1175,6 +1183,9 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
     observation = window_observation(hidden[:, a:b+1], target_segment,
                                      config.checkpoint_deviation_tau, config.checkpoint_numeric_norm_epsilon)
     event.update(observation)
+    event["pointwise_deviation_after"] = observation.get("pointwise_deviation")
+    if observation.get("pointwise_deviation") is not None:
+        event["pointwise_deviation_change"] = [0.] * len(observation["pointwise_deviation"])
     event["D_win_before"] = event["D_win_after"] = observation["D_win"]
     old_score = segment_cosine(hidden[:, a:b+1], target_segment)
     event["group_cosine_before"] = event["group_cosine_after"] = old_score
@@ -1185,16 +1196,11 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
     event["triggered"] = observation["D_win"] > float(torch.tensor(config.checkpoint_trigger_deviation, dtype=torch.float32))
     if not event["triggered"]:
         return finish("passed")
-    if old_score is None:
-        return finish("invalid_acceptance_observation")
-    cumulative = [segment_cosine(hidden[:, a:k+1], target[:, a:k+1]) for k in range(a,b+1)]
-    event["cumulative_cosine"] = cumulative
-    if any(value is None for value in cumulative):
-        return finish("invalid_cumulative_observation")
-    event.update(diagnose_segment(cumulative, config.checkpoint_diagnostic_tolerance, a))
+    event.update(diagnose_segment(observation["pointwise_deviation"], observation["D_win"],
+                                  config.checkpoint_diagnostic_tolerance, a))
     p = event["selected_position"]
     if p is None:
-        return finish("no_localizable_drop")
+        return finish("no_localizable_deviation")
     table = tables.get(p)
     if table is None or table.get("prefix_fingerprint") != prefix_fingerprint(tokens[:p]):
         return finish("missing_or_stale_candidate_table")
@@ -1204,12 +1210,38 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
                  old_token_id=tokens[p], new_token_id=tokens[p])
     eligible, excluded, mapping = filter_existing_candidates(
         table, tokens[p], tokenizer, embed_layer.num_embeddings, filter_nonascii,
-        config.checkpoint_candidate_min_cosine)
+        config.checkpoint_candidate_top_k)
     event.update(eligible_ids=eligible, excluded_reasons=excluded, duplicate_mapping=mapping)
     if not eligible:
         return finish("no_eligible_alternative")
+    # Calibrate on this unchanged discrete path and actual runtime, never on labels.
+    # The initial observation counts as the first of the bounded repeated forwards.
+    calibration = event["acceptance_calibration_scores"]
+    calibration.append(observation["D_win"])
+    for _ in range(config.checkpoint_acceptance_calibration_repeats - 1):
+        event["calibration_forward_calls"] += 1
+        event["forward_token_count"] += b+1
+        try:
+            repeated = forward_discrete(model, tokens[:b+1], layer_id, register_layer_hooks)
+            repeated_observation = window_observation(repeated[:, a:b+1], target_segment,
+                config.checkpoint_deviation_tau, config.checkpoint_numeric_norm_epsilon)
+        except Exception as error:
+            raise_if_fatal(error)
+            event["error_type"] = type(error).__name__
+            return finish("acceptance_calibration_failed")
+        if repeated_observation["invalid_reason"] is not None:
+            return finish("invalid_acceptance_calibration")
+        calibration.append(repeated_observation["D_win"])
+    epsilon = max(calibration) - min(calibration)
+    event["acceptance_epsilon"] = epsilon
+    event["acceptance_threshold"] = observation["D_win"] - epsilon
+    event["effective_acceptance_config"] = dict(
+        metric=config.checkpoint_acceptance_metric, epsilon=epsilon,
+        epsilon_source=config.checkpoint_acceptance_epsilon_source,
+        calibration_repeats=config.checkpoint_acceptance_calibration_repeats)
     event["repair_attempt_count"] = 1
-    best_id, best_score, best_trial, best_tables = None, -math.inf, None, []
+    best_id, best_score, best_trial, best_tables, best_observation = None, math.inf, None, [], None
+    best_group_cosine = None
     for index, token in enumerate(eligible):
         trial = list(tokens[:b+1])
         trial[p] = token
@@ -1242,23 +1274,26 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
         except Exception as error:
             raise_if_fatal(error)
             event.update(failed_id=token, unevaluated_ids=eligible[index+1:], error_type=type(error).__name__,
-                         partial_best_group_cosine=best_score if best_id is not None else None)
+                         partial_best_D_win=best_score if best_id is not None else None)
             return finish("candidate_forward_failed")
-        if score is None or trial_observation["invalid_reason"] is not None:
+        if trial_observation["invalid_reason"] is not None:
             event.update(failed_id=token, unevaluated_ids=eligible[index+1:],
-                         partial_best_group_cosine=best_score if best_id is not None else None)
+                         partial_best_D_win=best_score if best_id is not None else None)
             return finish("invalid_candidate_score")
         event["evaluated_ids"].append(token)
         event["candidate_group_cosines"].append(score)
         event["candidate_paths"].append(dict(seed_token_id=token,
             segment_tokens=list(trial[a:b+1]), group_cosine=score,
+            pointwise_deviation_change=[after-before for before, after in zip(
+                observation["pointwise_deviation"], trial_observation["pointwise_deviation"])],
             **trial_observation,
             downstream_candidate_tables=trial_tables))
-        if score > best_score:
-            best_id, best_score = token, score
+        if trial_observation["D_win"] < best_score:
+            best_id, best_score = token, trial_observation["D_win"]
+            best_group_cosine, best_observation = score, trial_observation
             best_trial, best_tables = list(trial), trial_tables
-    event.update(all_candidates_scored=True, best_group_cosine=best_score)
-    if best_score <= old_score:
+    event.update(all_candidates_scored=True, best_group_cosine=best_group_cosine, best_D_win=best_score)
+    if best_score >= event["acceptance_threshold"]:
         return finish("no_improvement")
     # Prepare replacement BEFORE mutating either piece of formal state.
     replacement_ids = torch.tensor(best_trial[p:b+1], device=embed_layer.weight.device, dtype=torch.long)
@@ -1271,8 +1306,11 @@ def run_checkpoint(model, embed_layer, tokens, embedding, target, layer_id,
         embedding[0, p:b+1].copy_(replacement)
     tokens[p:b+1] = best_trial[p:b+1]
     tables.update(updated_tables)
-    event.update(accepted=True, new_token_id=best_id, group_cosine_after=best_score,
-                 D_win_after=next(path["D_win"] for path in event["candidate_paths"] if path["seed_token_id"] == best_id),
+    event.update(accepted=True, new_token_id=best_id, group_cosine_after=best_group_cosine,
+                 D_win_after=best_score,
+                 pointwise_deviation_after=best_observation["pointwise_deviation"],
+                 pointwise_deviation_change=[after-before for before, after in zip(
+                     observation["pointwise_deviation"], best_observation["pointwise_deviation"])],
                  future_context_invalidated_from=b+1, changed_positions=changed,
                  segment_tokens_after=list(tokens[a:b+1]))
     return finish("accepted")

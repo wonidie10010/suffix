@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""v2.2.2 CP-on-only launcher. Use --dry-run during implementation."""
+"""v2.2.2 CP-on-only launcher (schema 4, top-3 alternatives, calibrated D_win acceptance).
+
+Use --dry-run to check configuration without loading a model or starting an experiment.
+"""
 import argparse
 import os
 from pathlib import Path

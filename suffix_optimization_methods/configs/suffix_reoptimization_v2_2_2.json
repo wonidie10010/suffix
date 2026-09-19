@@ -22,8 +22,11 @@
   "suffix_v2_2_2_checkpoint_deviation_tau": 0.05,
   "suffix_v2_2_2_checkpoint_trigger_deviation": 0.05,
   "suffix_v2_2_2_checkpoint_diagnostic_tolerance": 0.02,
-  "suffix_v2_2_2_checkpoint_candidate_min_cosine": 0.9,
-  "suffix_v2_2_2_checkpoint_candidate_threshold_source": "user_fixed_2026_09_16",
+  "suffix_v2_2_2_checkpoint_candidate_top_k": 3,
+  "suffix_v2_2_2_checkpoint_candidate_policy": "stable_top_k_alternatives",
+  "suffix_v2_2_2_checkpoint_acceptance_metric": "pointwise_logmeanexp",
+  "suffix_v2_2_2_checkpoint_acceptance_epsilon_source": "per_window_repeated_forward_range",
+  "suffix_v2_2_2_checkpoint_acceptance_calibration_repeats": 3,
   "suffix_v2_2_2_checkpoint_forward_mode": "full_prefix",
   "suffix_v2_2_2_checkpoint_candidate_failure_policy": "abort_checkpoint_keep_state",
   "suffix_v2_2_2_checkpoint_tail_policy": "skip_incomplete",
@@ -31,6 +34,6 @@
   "suffix_v2_2_2_checkpoint_recursive": false,
   "suffix_v2_2_2_checkpoint_numeric_norm_epsilon": 1e-08,
   "suffix_v2_2_2_checkpoint_score_dtype": "float32",
-  "suffix_v2_2_2_checkpoint_schema_version": 3,
+  "suffix_v2_2_2_checkpoint_schema_version": 4,
   "suffix_v2_2_2_checkpoint_downstream_policy": "sequential_rerank_to_checkpoint_end"
 }

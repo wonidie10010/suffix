@@ -419,7 +419,7 @@ def _resolved_suffix_v222_config(args):
                      for key, value in vars(args).items() if key.startswith("suffix_v2_2_2_checkpoint_")})
     resolved["initial_stage"] = "copied_legacy_stage1_in_v222_sidecar"
     resolved["r_acceptance"] = "finite_continuous_hidden_loss_strictly_decreases"
-    resolved["checkpoint_acceptance"] = "all_eligible_candidates_scored_then_segment_sum_cosine_strictly_increases"
+    resolved["checkpoint_acceptance"] = "all_top_k_alternatives_scored_then_D_win_decreases_beyond_calibrated_epsilon"
     resolved["final_acceptance"] = "independent_R_and_checkpoint_transactions"
     return resolved
 

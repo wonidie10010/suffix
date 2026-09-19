@@ -22,7 +22,39 @@ runner=module("runner_v222","实验/环境和实验/内部文件/runner_suffix_v
 launcher=module("launcher_v222","实验/一键运行_suffix_v2_2_2.py")
 
 
+def checkpoint_event(**overrides):
+    event=dict(schema_version=4,candidate_top_k=3,acceptance_metric="pointwise_logmeanexp",
+               acceptance_epsilon_source="per_window_repeated_forward_range",
+               acceptance_calibration_repeats=3,accepted=False,repair_attempt_count=0)
+    event.update(overrides)
+    return event
+
+
 class RunnerTests(unittest.TestCase):
+    def test_event_contract_rejects_old_schema_and_invalid_acceptance(self):
+        valid=checkpoint_event(accepted=True,repair_attempt_count=1,all_candidates_scored=True,
+            acceptance_calibration_scores=[.25,.28125,.25],acceptance_epsilon=.03125,
+            acceptance_threshold=.21875,D_win_before=.25,D_win_after=.1875)
+        runner.validate_checkpoint_event(valid)
+        for change in (dict(schema_version=3),dict(D_win_after=.21875),
+                       dict(acceptance_epsilon=0.),dict(all_candidates_scored=False),
+                       dict(acceptance_calibration_scores=[.25,float('nan'),.25])):
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                runner.validate_checkpoint_event(dict(valid,**change))
+
+    def test_summary_counts_calibration_cost_and_failures(self):
+        events=[checkpoint_event(observation_forward_calls=1,calibration_forward_calls=2,
+            candidate_forward_calls=3,downstream_forward_calls=6,acceptance_epsilon=.001),
+            checkpoint_event(observation_forward_calls=1,calibration_forward_calls=1,
+                             reason="acceptance_calibration_failed")]
+        result=dict(pair_id="test:0",stage1_snapshot_sha256="fixture",
+                    checkpoint=dict(complete_segment_count=2,events=events))
+        row=runner.summarize_on([dict(accuracy=.5,suffix_reoptimization_v2_2_2_result=result)])["samples"][0]
+        self.assertEqual(14,row["cp_forward_calls"])
+        self.assertEqual(3,row["calibration_forward_calls"])
+        self.assertEqual(1,row["calibration_failure_count"])
+        self.assertEqual([.001],row["acceptance_epsilon_values"])
+
     def test_busy_gpu_blocks_before_launch(self):
         for outputs in (["1234"],["", "10, 0"],["", "0, 1000"]):
             run=mock.Mock(side_effect=[types.SimpleNamespace(stdout=text) for text in outputs])
@@ -106,7 +138,7 @@ class RunnerTests(unittest.TestCase):
                     enabled=config[runner.PREFIX+"checkpoint_enabled"]
                     result=dict(formal_gt_blind=True,gt_accessed=False,pair_id="checkpoint_smoke:0",
                                 stage1_snapshot_sha256="identical",second_stage_seconds=1.,
-                                checkpoint=dict(complete_segment_count=1,events=[{}] if enabled else []))
+                                checkpoint=dict(complete_segment_count=1,events=[checkpoint_event()] if enabled else []))
                     result["reoptimization"]={"checkpoint":result["checkpoint"]}
                     record=dict(pair_id="checkpoint_smoke:0",dataset={"name":"checkpoint_smoke"},accuracy=.5,
                                 selected_advanced_method=runner.METHOD,selected_candidate_reranking_method="none",

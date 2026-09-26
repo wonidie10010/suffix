@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""v2.2.2 CP-on-only launcher (schema 4, top-3 alternatives, calibrated D_win acceptance).
+"""v2.2.2 CP-on-only launcher (schema 5: multi-source, single-point scan, joint sum).
 
 Use --dry-run to check configuration without loading a model or starting an experiment.
+Formal/smoke runs independently calibrate epsilon before processing any sample.
 """
 import argparse
 import os

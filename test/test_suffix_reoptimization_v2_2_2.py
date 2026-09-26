@@ -43,6 +43,13 @@ def fixture(length=11, prefix=1, **config):
     mask = torch.ones((1, length), dtype=torch.long)
     target = _forward_tokens(model, tokens, mask, 0).detach()
     cfg = dict(enabled=True, checkpoint_enabled=True, steps=1, range_top_k=2, max_attempts=0)
+    # Historical schema-4 tests remain explicit regression coverage for the control.
+    cfg.update(checkpoint_schema_version=4, checkpoint_candidate_top_k=3,
+        checkpoint_candidate_policy="stable_top_k_alternatives",
+        checkpoint_acceptance_metric="pointwise_logmeanexp",
+        checkpoint_acceptance_epsilon_source="per_window_repeated_forward_range",
+        checkpoint_candidate_failure_policy="abort_checkpoint_keep_state",
+        checkpoint_downstream_policy="sequential_rerank_to_checkpoint_end")
     cfg.update(config)
     kwargs=dict(model=model, embed_layer=model.embed_tokens, optimized_embedding=embedding,
                 target_hidden_state=target, attention_mask=mask, layer_id=0,
@@ -478,6 +485,203 @@ class Stage1Tests(unittest.TestCase):
             self.assertTrue(torch.equal(a,b))
             self.assertEqual(ra["stage1_snapshot_sha256"],rb["stage1_snapshot_sha256"])
             self.assertTrue(rb["stage1_reused"])
+
+
+class Design4Tokenizer:
+    all_special_ids = [0]
+    bos_token_id = 0
+    words = ["<bos>", "word", "Word", "WORD", " word", "ord", "wor", "other", "Other", "other ", "her", "ot"]
+
+    def decode(self, ids, clean_up_tokenization_spaces=False):
+        return "".join(self.words[int(t)] for t in ids)
+
+    def encode(self, text, add_special_tokens=False):
+        return [self.words.index(text)] if text in self.words else [1, 1]
+
+
+class Design4Tests(unittest.TestCase):
+    def setup_scan(self):
+        args = list(TransactionTests().setup_trial())
+        args[7] = Design4Tokenizer()
+        args[8] = cp.SuffixReoptimizationV222Config(enabled=True, checkpoint_enabled=True,
+            checkpoint_acceptance_epsilon=.001, checkpoint_consistency_tolerance=.006,
+            checkpoint_calibration_id="synthetic-test-only")
+        args[9] = {i: dict(candidate_token_ids=[1, 2], candidate_hidden_cosine=[.9, .8],
+                        prefix_fingerprint=cp.prefix_fingerprint(args[2][:i])) for i in range(1, 6)}
+        return args
+
+    @staticmethod
+    def pools(table, token, *args):
+        # Only first two positions can change, with deterministic alternatives.
+        return dict(candidate_ids={3:[1], 4:[2]}.get(token, []))
+
+    @staticmethod
+    def token_forward(model, ids, *args):
+        return torch.tensor(ids).float().reshape(1, -1, 1).expand(-1, -1, 4).clone()
+
+    @staticmethod
+    def score(hidden, target, *args):
+        ids = hidden[0, :, 0].int().tolist()
+        values = [.2]*5
+        if ids[0] == 1:
+            values[0], values[1] = .21, .15  # seed worsens, total improves
+        if ids[1] == 2:
+            values[1] -= .05
+        return dict(pointwise_deviation=values, D_win=.4 if ids[0] == 1 else .3, invalid_reason=None)
+
+    def scan(self, args, **patches):
+        with mock.patch.object(cp, "build_checkpoint_candidates", side_effect=self.pools), \
+             mock.patch.object(cp, "forward_discrete", side_effect=patches.get("forward", self.token_forward)), \
+             mock.patch.object(cp, "window_observation", side_effect=patches.get("score", self.score)):
+            return cp.run_checkpoint(*args, downstream_rerank=mock.Mock(side_effect=AssertionError("no downstream rerank")))
+
+    def test_joint_score_is_shared_and_has_no_seed_gate(self):
+        before = dict(pointwise_deviation=[.2, .2], invalid_reason=None)
+        after = dict(pointwise_deviation=[.21, .1], invalid_reason=None)
+        self.assertAlmostEqual(-.09, cp.joint_window_delta(before, after))
+
+    def test_scan_rolls_baseline_forward_and_accepts_despite_dwin_worsening(self):
+        args = self.setup_scan()
+        original = list(args[2])
+        event = self.scan(args)
+        self.assertTrue(event["accepted"])
+        self.assertEqual([1, 2], args[2][1:3])
+        self.assertEqual(original[3:], args[2][3:])
+        self.assertEqual(1, event["positions"][1]["baseline_tokens"][0])
+        self.assertAlmostEqual(-.09, event["S_final"])
+        self.assertGreater(event["D_win_after"], event["D_win_before"])
+        self.assertEqual([1, 2], event["changed_positions"])
+        self.assertEqual(2, event["verification_forward_calls"])
+        self.assertEqual(0, event["downstream_forward_calls"])
+        json.dumps(event, allow_nan=False)
+
+    def test_all_candidates_of_one_position_share_baseline(self):
+        args = self.setup_scan()
+        seen = []
+        def pool(table, token, *rest):
+            return dict(candidate_ids=[1, 2] if token == 3 else [])
+        def forward(model, ids, *rest):
+            seen.append(list(ids))
+            return self.token_forward(model, ids)
+        with mock.patch.object(self, "pools", side_effect=pool):
+            self.scan(args, forward=forward)
+        self.assertEqual(seen[2][2:], seen[3][2:])
+        self.assertEqual([1, 2], [seen[2][1], seen[3][1]])
+
+    def test_invalid_candidate_does_not_poison_following_position(self):
+        args = self.setup_scan()
+        def forward(model, ids, *rest):
+            if ids[1] == 1:
+                raise ValueError("invalid candidate")
+            return self.token_forward(model, ids)
+        event = self.scan(args, forward=forward)
+        self.assertTrue(event["accepted"])
+        self.assertEqual([3, 2], args[2][1:3])
+        self.assertFalse(event["all_candidates_scored"])
+
+    def test_final_verification_failure_restores_all_state(self):
+        args = self.setup_scan()
+        before, embedding, tables = list(args[2]), args[3].clone(), copy.deepcopy(args[9])
+        calls = 0
+        def forward(model, ids, *rest):
+            nonlocal calls
+            calls += 1
+            if calls == 7:
+                raise ValueError("verification failed")
+            return self.token_forward(model, ids)
+        event = self.scan(args, forward=forward)
+        self.assertEqual("final_verification_failed", event["reason"])
+        self.assertEqual(before, args[2])
+        self.assertTrue(torch.equal(embedding, args[3]))
+        self.assertEqual(tables, args[9])
+
+    def test_missing_calibration_is_not_treated_as_zero(self):
+        args = self.setup_scan()
+        args[8].checkpoint_acceptance_epsilon = None
+        with self.assertRaisesRegex(cp.CheckpointContractError, "calibration"):
+            cp.run_checkpoint(*args)
+
+    def test_strict_joint_margin_and_zero_change_keep_original(self):
+        for delta in (0., -.125, -.25):
+            args = self.setup_scan()
+            args[8].checkpoint_acceptance_epsilon = .125
+            args[8].checkpoint_consistency_tolerance = .001
+            before = list(args[2])
+            def score(hidden, target, *rest):
+                d = [.5]*5
+                if int(hidden[0, 0, 0]) == 1:
+                    d[0] += delta
+                return dict(pointwise_deviation=d, D_win=.5, invalid_reason=None)
+            event = self.scan(args, score=score)
+            self.assertEqual(delta < -.125, event["accepted"])
+            if not event["accepted"]:
+                self.assertEqual(before, args[2])
+
+    def test_hard_failure_after_staging_has_no_formal_mutation(self):
+        args = self.setup_scan()
+        before, embedding = list(args[2]), args[3].clone()
+        def forward(model, ids, *rest):
+            if ids[2] == 2:
+                raise cp.CheckpointContractError("broken candidate isolation")
+            return self.token_forward(model, ids)
+        with self.assertRaises(cp.CheckpointContractError):
+            self.scan(args, forward=forward)
+        self.assertEqual(before, args[2])
+        self.assertTrue(torch.equal(embedding, args[3]))
+
+    def test_special_position_is_frozen_but_stays_in_score(self):
+        args = self.setup_scan()
+        args[2][1] = 0
+        event = self.scan(args)
+        self.assertEqual(0, args[2][1])
+        self.assertEqual("frozen_special_token", event["candidate_pools"][0]["reason"])
+        self.assertTrue(event["accepted"])
+        self.assertEqual(5, len(event["pointwise_deviation_after"]))
+
+    def test_stage_sampling_missing_final_and_tie_order(self):
+        model = Model().eval()
+        with torch.no_grad():
+            model.embed_tokens.weight.fill_(1.)
+        collector = cp.StageCandidateCollector(6, 1, model.embed_tokens, "cosine", "test", [0])
+        emb = torch.ones(1, 4, 4)
+        for step in (1, 2, 3, 4):
+            collector(step, emb)
+        rows = collector.finalize(4, 4)
+        self.assertEqual([2], [s["step"] for s in rows[1]["stages"]])
+        self.assertEqual(list(range(10)), rows[1]["stages"][0]["token_ids"])
+        self.assertEqual([1, 2, 3], list(rows))
+        early = cp.StageCandidateCollector(1, 1, model.embed_tokens, "cosine", "early", [0])
+        early(1, emb)
+        self.assertEqual([], early.finalize(1, 4)[1]["stages"])
+
+    def test_candidate_quotas_roundtrip_and_duplicate_provenance(self):
+        table = dict(candidate_token_ids=[7, 1, 2, 3], candidate_hidden_cosine=[1., .9, .8, .7])
+        trajectory = dict(call_id="stage1", stages=[dict(step=2, token_ids=[1, 4]), dict(step=4, token_ids=[4, 5])])
+        pool = cp.build_checkpoint_candidates(table, 7, Design4Tokenizer(), 12, trajectory=trajectory)
+        ids = pool["candidate_ids"]
+        self.assertEqual([1, 2, 3, 4, 5], ids[:5])
+        self.assertNotIn(7, ids)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertLessEqual(len(ids), 9)
+        self.assertEqual(["old", "stage_2"], [x["source"] for x in pool["candidates"][0]["sources"]][:2])
+        self.assertEqual(pool, cp.build_checkpoint_candidates(table, 7, Design4Tokenizer(), 12, trajectory=trajectory))
+
+    def test_empty_stage_quota_is_not_borrowed(self):
+        table = dict(candidate_token_ids=list(range(1, 12)), candidate_hidden_cosine=[1.-i*.01 for i in range(11)])
+        pool = cp.build_checkpoint_candidates(table, 7, Design4Tokenizer(), 12)
+        self.assertEqual(3, sum(r["quota_source"] == "old" for r in pool["candidates"]))
+        self.assertLessEqual(len(pool["candidate_ids"]), 7)
+
+    def test_independent_calibration_freezes_positive_margin_and_preserves_rng(self):
+        model, config = Model().eval(), cp.SuffixReoptimizationV222Config(checkpoint_enabled=True)
+        state = torch.get_rng_state().clone()
+        report = cp.calibrate_checkpoint(model, model.embed_tokens, Design4Tokenizer(), 0, _register_layer_hooks, config)
+        self.assertGreater(config.checkpoint_acceptance_epsilon, 0.)
+        self.assertEqual(report["calibration_id"], config.checkpoint_calibration_id)
+        self.assertTrue(torch.equal(state, torch.get_rng_state()))
+        self.assertEqual("independent_no_gt", report["calibration_kind"])
+        with self.assertRaises(ValueError):
+            cp.calibrate_checkpoint(model, model.embed_tokens, Design4Tokenizer(), 0, _register_layer_hooks, config)
 
 
 if __name__ == "__main__":

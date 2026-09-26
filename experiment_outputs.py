@@ -25,12 +25,28 @@ def checkpoint_offline_evaluation(result, reference_ids, eval_start_pos):
             int(value) != reference[a + offset]
             for offset, value in enumerate(event["segment_tokens_before"]))
         item["triggered"] = event["triggered"]
+        if event.get("schema_version") == 5:
+            trials = {row["position"]: row for row in event.get("positions", [])}
+            item["candidate_coverage"] = []
+            for pool in event.get("candidate_pools", []):
+                position = pool["position"]
+                expected = reference[position]
+                tested = trials.get(position, {})
+                item["candidate_coverage"].append(dict(
+                    position=position, old_pool_contains_gt=expected in pool.get("original_candidate_ids", []),
+                    selected_pool_contains_gt=expected in pool["candidate_ids"],
+                    gt_sources=[label for row in pool.get("candidates", []) if row["token_id"] == expected
+                                for label in row["sources"]],
+                    gt_tested=any(t["token_id"] == expected for t in tested.get("trials", [])),
+                    gt_validly_scored=any(t["token_id"] == expected and t["valid"] for t in tested.get("trials", [])),
+                    selected_correct=tested.get("selected_token_id") == expected if tested else None))
         if event["accepted"]:
-            position = event["selected_position"]
-            before = event["old_token_id"] == reference[position]
-            after = event["new_token_id"] == reference[position]
-            item.update(position=position, old_correct=before, new_correct=after,
-                        repaired=not before and after, damaged=before and not after)
+            if event.get("schema_version") != 5:
+                position = event["selected_position"]
+                before = event["old_token_id"] == reference[position]
+                after = event["new_token_id"] == reference[position]
+                item.update(position=position, old_correct=before, new_correct=after,
+                            repaired=not before and after, damaged=before and not after)
             if "segment_tokens_after" in event:
                 segment_before, segment_after = event["segment_tokens_before"], event["segment_tokens_after"]
                 if len(segment_before) != b-a+1 or len(segment_after) != b-a+1:
@@ -39,6 +55,8 @@ def checkpoint_offline_evaluation(result, reference_ids, eval_start_pos):
                 item["direct_repairs"] = sum(old != reference[a+i] and new == reference[a+i]
                     for i,(old,new) in enumerate(zip(segment_before,segment_after)))
                 item["direct_damage"] = sum(old == reference[a+i] and new != reference[a+i]
+                    for i,(old,new) in enumerate(zip(segment_before,segment_after)))
+                item["wrong_to_wrong_changes"] = sum(old != new and old != reference[a+i] and new != reference[a+i]
                     for i,(old,new) in enumerate(zip(segment_before,segment_after)))
         events.append(item)
     return {
@@ -419,7 +437,10 @@ def _resolved_suffix_v222_config(args):
                      for key, value in vars(args).items() if key.startswith("suffix_v2_2_2_checkpoint_")})
     resolved["initial_stage"] = "copied_legacy_stage1_in_v222_sidecar"
     resolved["r_acceptance"] = "finite_continuous_hidden_loss_strictly_decreases"
-    resolved["checkpoint_acceptance"] = "all_top_k_alternatives_scored_then_D_win_decreases_beyond_calibrated_epsilon"
+    resolved["checkpoint_acceptance"] = (
+        "multi_source_single_point_scan_with_joint_window_sum_and_final_verification"
+        if resolved.get("checkpoint_schema_version") == 5 else
+        "all_top_k_alternatives_scored_then_D_win_decreases_beyond_calibrated_epsilon")
     resolved["final_acceptance"] = "independent_R_and_checkpoint_transactions"
     return resolved
 

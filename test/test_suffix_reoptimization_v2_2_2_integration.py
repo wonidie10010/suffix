@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 from experiment_outputs import checkpoint_offline_evaluation, _resolved_suffix_v222_config, extract_experiment_stage_summary, write_experiment_sample_summary
 from suffix_optimization_methods.method_versions import suffix_reoptimization_v2_2_2 as cp
-from test.test_suffix_reoptimization_v2_2_2 import fixture, _register_layer_hooks
+from test.test_suffix_reoptimization_v2_2_2 import fixture, _register_layer_hooks, Design4Tokenizer
 from test.test_suffix_v2_2_2_runner import runner
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -28,6 +28,41 @@ def load_functions(*names,extra=None):
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_design4_accepted_window_offline_and_runner_contract(self):
+        from test.test_suffix_reoptimization_v2_2_2 import Design4Tests
+        case = Design4Tests()
+        args = case.setup_scan()
+        reference = list(args[2])
+        event = case.scan(args)
+        runner.validate_checkpoint_event(event)
+        result = dict(final_tokens=args[2], checkpoint=dict(events=[event]))
+        evaluation = checkpoint_offline_evaluation(result, reference, 1)
+        self.assertEqual(2, evaluation["direct_damage"])
+        self.assertEqual(0, evaluation["direct_repairs"])
+        self.assertEqual(5, len(evaluation["checkpoint_events"][0]["candidate_coverage"]))
+
+    def test_design4_real_cpu_two_stage_trajectory_and_calibration(self):
+        kwargs = fixture(6, max_attempts=1)
+        kwargs["config"] = cp.SuffixReoptimizationV222Config(enabled=True, checkpoint_enabled=True,
+            steps=3, max_attempts=1, range_top_k=2)
+        kwargs["tokenizer"] = Design4Tokenizer()
+        config = kwargs["config"]
+        cp.calibrate_checkpoint(kwargs["model"], kwargs["embed_layer"], kwargs["tokenizer"],
+                                0, _register_layer_hooks, config)
+        initial = kwargs.pop("optimized_embedding")
+        stage1 = dict(model=kwargs["model"], initial_embedding=initial[:,1:], prefix_embedding=initial[:,:1],
+            target_hidden_state=kwargs["target_hidden_state"], attention_mask=kwargs["attention_mask"],
+            layer_id=0, register_layer_hooks=_register_layer_hooks, weight_mask=torch.ones(6),
+            right_range=torch.ones(4), lr=.01, epoch=3, alpha=.001)
+        _, result = cp.run_two_stage(stage1_kwargs=stage1, stage2_kwargs=kwargs)
+        self.assertEqual([1, 2], result["stage1"]["checkpoint_trajectory"]["captured_steps"])
+        self.assertEqual(1, len(result["checkpoint"]["events"]))
+        event = result["checkpoint"]["events"][0]
+        runner.validate_checkpoint_event(event)
+        self.assertNotEqual("candidate_generation_failed", event["reason"])
+        self.assertEqual(5, event["schema_version"])
+        json.dumps(result, allow_nan=False)
+
     def test_offline_direct_and_final_effects_are_separate(self):
         result={"final_tokens":[0,3,8,5,6,7],"checkpoint":{"events":[dict(
             checkpoint_id=0,a=1,b=5,accepted=True,triggered=True,selected_position=2,
@@ -86,10 +121,10 @@ class IntegrationTests(unittest.TestCase):
         self.assertTrue(parsed.checkpoint_enabled)
         self.assertEqual(.02,resolved["checkpoint_diagnostic_tolerance"])
         self.assertEqual("pointwise_logmeanexp", resolved["checkpoint_trigger_metric"])
-        self.assertEqual(4, resolved["checkpoint_schema_version"])
-        self.assertEqual(3, resolved["checkpoint_candidate_top_k"])
-        self.assertEqual("per_window_repeated_forward_range", resolved["checkpoint_acceptance_epsilon_source"])
-        self.assertIn("D_win_decreases", resolved["checkpoint_acceptance"])
+        self.assertEqual(5, resolved["checkpoint_schema_version"])
+        self.assertEqual(9, resolved["checkpoint_candidate_top_k"])
+        self.assertEqual("independent_synthetic_calibration", resolved["checkpoint_acceptance_epsilon_source"])
+        self.assertIn("joint_window_sum", resolved["checkpoint_acceptance"])
         record=dict(selected_advanced_method=runner.METHOD,selected_candidate_reranking_method="none",
                     accuracy=.8,suffix_reoptimization_v2_2_2_result=dict(pre_acc=.5,post_acc=.8))
         summary=extract_experiment_stage_summary(record)

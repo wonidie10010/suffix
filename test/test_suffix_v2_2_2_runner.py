@@ -23,8 +23,10 @@ launcher=module("launcher_v222","实验/一键运行_suffix_v2_2_2.py")
 
 
 def checkpoint_event(**overrides):
-    event=dict(schema_version=4,candidate_top_k=3,acceptance_metric="pointwise_logmeanexp",
-               acceptance_epsilon_source="per_window_repeated_forward_range",
+    event=dict(schema_version=5,candidate_top_k=9,acceptance_metric="window_sum_delta",
+               acceptance_epsilon_source="independent_synthetic_calibration",
+               downstream_policy="fixed_tokens_single_point_scan", calibration_id="synthetic-test-only",
+               acceptance_epsilon=.001, consistency_tolerance=.006, acceptance_threshold=-.001,
                acceptance_calibration_repeats=3,accepted=False,repair_attempt_count=0)
     event.update(overrides)
     return event
@@ -33,12 +35,12 @@ def checkpoint_event(**overrides):
 class RunnerTests(unittest.TestCase):
     def test_event_contract_rejects_old_schema_and_invalid_acceptance(self):
         valid=checkpoint_event(accepted=True,repair_attempt_count=1,all_candidates_scored=True,
-            acceptance_calibration_scores=[.25,.28125,.25],acceptance_epsilon=.03125,
-            acceptance_threshold=.21875,D_win_before=.25,D_win_after=.1875)
+            S_final=-.1,local_deltas=[-.1],consistency_error=0.,changed_positions=[1],verification_forward_calls=2,
+            D_win_before=.25,D_win_after=.3)
         runner.validate_checkpoint_event(valid)
-        for change in (dict(schema_version=3),dict(D_win_after=.21875),
-                       dict(acceptance_epsilon=0.),dict(all_candidates_scored=False),
-                       dict(acceptance_calibration_scores=[.25,float('nan'),.25])):
+        for change in (dict(schema_version=4),dict(S_final=-.001),
+                       dict(acceptance_epsilon=0.),dict(consistency_error=.1),
+                       dict(local_deltas=[float('nan')]),dict(candidate_state_count=46)):
             with self.subTest(change=change),self.assertRaises(ValueError):
                 runner.validate_checkpoint_event(dict(valid,**change))
 
@@ -46,13 +48,13 @@ class RunnerTests(unittest.TestCase):
         events=[checkpoint_event(observation_forward_calls=1,calibration_forward_calls=2,
             candidate_forward_calls=3,downstream_forward_calls=6,acceptance_epsilon=.001),
             checkpoint_event(observation_forward_calls=1,calibration_forward_calls=1,
-                             reason="acceptance_calibration_failed")]
+                             reason="final_verification_failed",acceptance_epsilon=None)]
         result=dict(pair_id="test:0",stage1_snapshot_sha256="fixture",
                     checkpoint=dict(complete_segment_count=2,events=events))
         row=runner.summarize_on([dict(accuracy=.5,suffix_reoptimization_v2_2_2_result=result)])["samples"][0]
         self.assertEqual(14,row["cp_forward_calls"])
         self.assertEqual(3,row["calibration_forward_calls"])
-        self.assertEqual(1,row["calibration_failure_count"])
+        self.assertEqual(1,row["verification_failure_count"])
         self.assertEqual([.001],row["acceptance_epsilon_values"])
 
     def test_busy_gpu_blocks_before_launch(self):
@@ -145,8 +147,12 @@ class RunnerTests(unittest.TestCase):
                                 suffix_reoptimization_v2_2_2_result=result)
                     out=project/"results/invert_timestamp_runs"/runner.METHOD/str(len(calls))
                     out.mkdir(parents=True)
-                    runner.dump(out/"resolved_config.json",dict(advanced_method={"name":runner.METHOD},advanced_methods={
-                        "suffix_reoptimization_v2_2_2":dict(runner.FROZEN,checkpoint_enabled=enabled)}))
+                    runner.dump(out/"resolved_config.json",dict(advanced_method={"name":runner.METHOD},
+                        runtime=dict(checkpoint_calibration=dict(calibration_kind="independent_no_gt",
+                            calibration_id="synthetic-test-only",epsilon=.001,consistency_tolerance=.006)),advanced_methods={
+                        "suffix_reoptimization_v2_2_2":dict(runner.FROZEN,checkpoint_enabled=enabled,
+                            checkpoint_calibration_id="synthetic-test-only",checkpoint_acceptance_epsilon=.001,
+                            checkpoint_consistency_tolerance=.006)}))
                     (out/"experiment.log").write_text("fixed summary",encoding="utf-8")
                     (out/"reconstructions.jsonl").write_text(json.dumps(record)+"\n",encoding="utf-8")
                     return types.SimpleNamespace(returncode=0)

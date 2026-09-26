@@ -23,17 +23,17 @@ CONFIGS = {label: "experiment_configs/l24_deml3x4_suffix_v2_2_2_cp_{}.json".form
 ARTIFACTS = ("resolved_config.json", "experiment.log", "reconstructions.jsonl")
 FROZEN = dict(checkpoint_size=5, checkpoint_stride=5, checkpoint_trigger_metric="pointwise_logmeanexp",
               checkpoint_deviation_tau=0.05, checkpoint_trigger_deviation=0.05,
-              checkpoint_diagnostic_tolerance=0.02, checkpoint_candidate_top_k=3,
-              checkpoint_candidate_policy="stable_top_k_alternatives",
-              checkpoint_acceptance_metric="pointwise_logmeanexp",
-              checkpoint_acceptance_epsilon_source="per_window_repeated_forward_range",
+              checkpoint_diagnostic_tolerance=0.02, checkpoint_candidate_top_k=9,
+              checkpoint_candidate_policy="multi_source_3_2_4",
+              checkpoint_acceptance_metric="window_sum_delta",
+              checkpoint_acceptance_epsilon_source="independent_synthetic_calibration",
               checkpoint_acceptance_calibration_repeats=3,
               checkpoint_forward_mode="full_prefix",
-              checkpoint_candidate_failure_policy="abort_checkpoint_keep_state",
+              checkpoint_candidate_failure_policy="skip_invalid_candidate_abort_hard_failure",
               checkpoint_tail_policy="skip_incomplete", checkpoint_max_repairs=1,
               checkpoint_recursive=False, checkpoint_numeric_norm_epsilon=1e-8,
-              checkpoint_score_dtype="float32", checkpoint_schema_version=4,
-              checkpoint_downstream_policy="sequential_rerank_to_checkpoint_end")
+              checkpoint_score_dtype="float32", checkpoint_schema_version=5,
+              checkpoint_downstream_policy="fixed_tokens_single_point_scan", checkpoint_stage_top_k=10)
 
 
 def load_config(path, stack=()):
@@ -72,13 +72,16 @@ def validate_configs(configs):
             raise ValueError("experiment requires CGMR none")
         if any(PREFIX+key in config for key in ("checkpoint_trigger_cosine",
                 "checkpoint_candidate_min_cosine", "checkpoint_candidate_threshold_source")):
-            raise ValueError("obsolete checkpoint setting; migrate to schema 4")
+            raise ValueError("obsolete checkpoint setting; migrate to schema 5")
         if config.get(PREFIX+"checkpoint_enabled") is not (label == "on"):
             raise ValueError("wrong checkpoint switch")
         for key, value in FROZEN.items():
             actual = config.get(PREFIX+key)
             if type(actual) is not type(value) or actual != value:
                 raise ValueError("invalid frozen setting: " + PREFIX+key)
+        for key in ("checkpoint_acceptance_epsilon", "checkpoint_consistency_tolerance", "checkpoint_calibration_id"):
+            if PREFIX+key not in config or config[PREFIX+key] is not None:
+                raise ValueError("runtime calibration field must explicitly be null: "+PREFIX+key)
     return True
 
 
@@ -154,6 +157,8 @@ def preflight(project, model_path=None, runtime=None):
             pending.append("dataset: " + str(path))
     return dict(configs=configs, model_path=str(model.resolve()), model_cache=cache_info, pending_server_checks=pending,
                 groups=["cp_on"], stage1="write and retain snapshots in bundle",
+                checkpoint_flow="4-1 multi-source -> 4-2 single-point scan using 4-3 joint sum -> final verification",
+                numerical_calibration="independent synthetic inputs at runtime before samples; not performed by dry-run",
                 real_model_loaded=False)
 
 
@@ -172,6 +177,13 @@ def read_artifacts(run_dir, enabled, expected_count):
     for key, value in FROZEN.items():
         if advanced.get(key) != value:
             raise ValueError("artifact contract mismatch: " + key)
+    if enabled:
+        calibration = resolved.get("runtime", {}).get("checkpoint_calibration", {})
+        if (calibration.get("calibration_kind") != "independent_no_gt"
+                or calibration.get("calibration_id") != advanced.get("checkpoint_calibration_id")
+                or calibration.get("epsilon") != advanced.get("checkpoint_acceptance_epsilon")
+                or calibration.get("consistency_tolerance") != advanced.get("checkpoint_consistency_tolerance")):
+            raise ValueError("missing or inconsistent independent numerical calibration")
     if len(records) != expected_count:
         raise ValueError("unexpected sample count")
     keys = []
@@ -190,6 +202,10 @@ def read_artifacts(run_dir, enabled, expected_count):
             raise ValueError("incomplete checkpoint events")
         for event in checkpoint["events"]:
             validate_checkpoint_event(event)
+            if (event.get("calibration_id") != advanced.get("checkpoint_calibration_id")
+                    or event.get("acceptance_epsilon") != advanced.get("checkpoint_acceptance_epsilon")
+                    or event.get("consistency_tolerance") != advanced.get("checkpoint_consistency_tolerance")):
+                raise ValueError("event does not use the run's frozen numerical calibration")
     if len(set(keys)) != len(keys):
         raise ValueError("duplicate sample identity")
     return records
@@ -203,27 +219,34 @@ def validate_checkpoint_event(event):
                             ("acceptance_calibration_repeats", FROZEN["checkpoint_acceptance_calibration_repeats"])):
         if type(event.get(field)) is not type(expected) or event[field] != expected:
             raise ValueError("checkpoint event contract mismatch: " + field)
-    if event.get("repair_attempt_count", 0) or event.get("accepted"):
-        scores = event.get("acceptance_calibration_scores", [])
-        epsilon = event.get("acceptance_epsilon")
-        before, after = event.get("D_win_before"), event.get("D_win_after")
-        def finite(value):
-            return type(value) in (int, float) and math.isfinite(value)
-        if (len(scores) != FROZEN["checkpoint_acceptance_calibration_repeats"]
-                or not all(finite(v) for v in scores) or not finite(epsilon) or epsilon < 0
-                or not finite(before) or not finite(after)
-                or epsilon != max(scores)-min(scores)
-                or scores[0] != before
-                or event.get("acceptance_threshold") != before-epsilon):
-            raise ValueError("invalid checkpoint acceptance calibration")
-        if event.get("accepted") and (not event.get("all_candidates_scored") or not after < before-epsilon):
-            raise ValueError("accepted checkpoint violates D_win acceptance")
+    def finite(value):
+        return type(value) in (int, float) and math.isfinite(value)
+    epsilon, tolerance = event.get("acceptance_epsilon"), event.get("consistency_tolerance")
+    if (not event.get("calibration_id") or not finite(epsilon) or epsilon < 0
+            or not finite(tolerance) or tolerance < 0 or event.get("acceptance_threshold") != -epsilon
+            or event.get("downstream_policy") != FROZEN["checkpoint_downstream_policy"]):
+        raise ValueError("invalid frozen checkpoint calibration or search policy")
+    pools = event.get("candidate_pools", [])
+    if any(len(p["candidate_ids"]) > 9 or len(set(p["candidate_ids"])) != len(p["candidate_ids"]) for p in pools):
+        raise ValueError("invalid checkpoint candidate pool")
+    if event.get("candidate_state_count", 0) > 45 or event.get("downstream_forward_calls", 0) != 0:
+        raise ValueError("single-point scan budget/policy violated")
+    if event.get("accepted"):
+        score, error = event.get("S_final"), event.get("consistency_error")
+        if (not finite(score) or not score < -epsilon or not finite(error) or error > tolerance
+                or not event.get("changed_positions") or event.get("verification_forward_calls", 0) != 2):
+            raise ValueError("accepted checkpoint violates joint-window acceptance")
+        if not event.get("local_deltas") or any(not finite(s) or s >= -epsilon for s in event["local_deltas"]):
+            raise ValueError("invalid locally staged improvements")
+        if abs(score-math.fsum(event["local_deltas"])) > tolerance:
+            raise ValueError("local/final delta mismatch")
 
 
 def checkpoint_forward_calls(events):
     return sum(sum(event.get(key, 0) for key in (
         "observation_forward_calls", "calibration_forward_calls",
-        "candidate_forward_calls", "downstream_forward_calls")) for event in events)
+        "candidate_forward_calls", "downstream_forward_calls", "baseline_forward_calls",
+        "verification_forward_calls")) for event in events)
 
 
 def compare_pair(off_records, on_records):
@@ -331,10 +354,14 @@ def summarize_on(records):
             repair_attempt_count=sum(e.get("repair_attempt_count", 0) for e in events),
             accepted_repair_count=sum(e.get("accepted") is True for e in events),
             D_win_values=[e["D_win_before"] for e in events if e.get("D_win_before") is not None],
+            S_final_values=[e["S_final"] for e in events if e.get("S_final") is not None],
+            candidate_state_count=sum(e.get("candidate_state_count", 0) for e in events),
+            locally_staged_count=sum(len(e.get("local_deltas", [])) for e in events),
+            candidate_generation_seconds=sum(e.get("candidate_generation_seconds", 0.) for e in events),
             acceptance_epsilon_values=[e["acceptance_epsilon"] for e in events if e.get("acceptance_epsilon") is not None],
             calibration_forward_calls=sum(e.get("calibration_forward_calls", 0) for e in events),
-            calibration_failure_count=sum(e.get("reason") in (
-                "acceptance_calibration_failed", "invalid_acceptance_calibration") for e in events),
+            verification_failure_count=sum(e.get("reason") in (
+                "final_verification_failed", "inconsistent_final_verification") for e in events),
             score_conflict_count=sum(e.get("accepted") is True and e.get("D_win_after", 0) > e.get("D_win_before", 0) for e in events),
             reason_counts=dict(Counter(e.get("reason") for e in events)),
             cp_forward_calls=checkpoint_forward_calls(events),
@@ -430,6 +457,8 @@ def run_bundle(project, runtime, result_root, python, model_path=None, smoke=Fal
             manifest["groups"][label] = dict(run_dir=str(runs[0]), config_sha256=digest(config_path),
                                              jsonl_bytes=(runs[0]/"reconstructions.jsonl").stat().st_size,
                                              artifacts={name:digest(runs[0]/name) for name in ARTIFACTS})
+            resolved = json.loads((runs[0]/"resolved_config.json").read_text(encoding="utf-8"))
+            manifest["groups"][label]["checkpoint_calibration"] = resolved.get("runtime", {}).get("checkpoint_calibration")
             dump(bundle/"manifest.json", manifest)
         summary=summarize_on(records_by_label["on"])
         dump(bundle/"cp_on_summary.json", summary)

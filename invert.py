@@ -120,6 +120,7 @@ from suffix_optimization_methods.method_versions.suffix_reoptimization_v2_2_1 im
 from suffix_optimization_methods.method_versions.suffix_reoptimization_v2_2_2 import (
     SuffixReoptimizationV222Config, config_from_mapping as suffix_v222_config_from_mapping,
     run_two_stage as run_suffix_v222_two_stage, forward_discrete as suffix_v222_forward_discrete,
+    calibrate_checkpoint as calibrate_suffix_v222_checkpoint,
 )
 from utils import *
 
@@ -2178,6 +2179,18 @@ def main(args):
         embed_layer = get_input_embedding_layer(model)
         model_device = get_model_device(model)
         embed_dim = embed_layer.weight.shape[-1]
+
+        if selected_advanced_method == "suffix_reoptimization_v2.2.2":
+            calibration = calibrate_suffix_v222_checkpoint(
+                model, embed_layer, tokenizer, args.num_invert_layers,
+                register_layer_hooks, suffix_reopt_v2_2_2_config)
+            if calibration is not None:
+                method_config = resolved_config["advanced_methods"]["suffix_reoptimization_v2_2_2"]
+                for field in ("checkpoint_acceptance_epsilon", "checkpoint_consistency_tolerance", "checkpoint_calibration_id"):
+                    method_config[field] = getattr(suffix_reopt_v2_2_2_config, field)
+                resolved_config["runtime"]["checkpoint_calibration"] = calibration
+                if worker_spec is None:
+                    dump_json(resolved_config_path, resolved_config)
 
         '''get range'''
         embed_matrix = np.array(embed_layer.weight.data.cpu())

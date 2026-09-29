@@ -137,7 +137,7 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn("expansion",buffer.getvalue())
 
     def test_preflight_selector_and_config(self):
-        plan=runner.preflight(ROOT)
+        plan=runner.preflight(ROOT,model_path=ROOT/"models/Qwen2.5-1.5B")
         self.assertEqual(["checkpoint","discretization"],plan["groups"])
         cfg=expanded.config_from_mapping(plan["configs"]["discretization"])
         self.assertTrue(cfg.enabled)

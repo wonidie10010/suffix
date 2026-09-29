@@ -1179,7 +1179,11 @@ def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
         },
     }
     selected_advanced_method = resolved["advanced_method"]["name"]
-    selected_advanced_key = str(selected_advanced_method).replace(".", "_")
+    selected_advanced_key = (
+        "suffix_reoptimization_v2_2_2_2"
+        if selected_advanced_method == "suffix_reoptimization_v2.2.2(2)"
+        else str(selected_advanced_method).replace(".", "_")
+    )
     resolved["advanced_methods"] = {
         selected_advanced_key: resolved["advanced_methods"][selected_advanced_key]
     } if selected_advanced_key in resolved["advanced_methods"] else {}

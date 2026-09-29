@@ -12,7 +12,8 @@ from unittest import mock
 
 import torch
 
-from experiment_outputs import discretization_offline_evaluation, build_stage_accuracy, write_experiment_sample_summary
+from experiment_outputs import (discretization_offline_evaluation, build_stage_accuracy,
+                                build_resolved_config, write_experiment_sample_summary)
 from suffix_optimization_methods.method_versions import suffix_reoptimization_v2_2_2 as cp
 from suffix_optimization_methods.method_versions import suffix_reoptimization_v2_2_2_2 as expanded
 from test.test_suffix_reoptimization_v2_2_2 import fixture, Design4Tokenizer, _register_layer_hooks
@@ -127,6 +128,21 @@ class ExpansionTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
+    def test_resolved_config_keeps_new_version_settings(self):
+        config=runner.preflight(ROOT,model_path=ROOT/"models/Qwen2.5-1.5B")["configs"]["discretization"]
+        class Args(types.SimpleNamespace):
+            def __getattr__(self,name):
+                return None
+        args=Args(**config)
+        args.selected_advanced_method=expanded.METHOD_NAME
+        args.selected_candidate_reranking_method="none"
+        args.config="paired-test.json"
+        resolved=build_resolved_config(args,"timestamp","run","experiment.log","reconstructions.jsonl",
+            None,1,24,"qwen2")
+        self.assertEqual(["suffix_reoptimization_v2_2_2_2"],list(resolved["advanced_methods"]))
+        self.assertEqual("checkpoint_sources_2_plus_4",
+            resolved["advanced_methods"]["suffix_reoptimization_v2_2_2_2"]["expansion_policy"])
+
     def test_fixed_log_summary_has_no_added_diagnostics(self):
         record=dict(selected_advanced_method=expanded.METHOD_NAME,selected_candidate_reranking_method="none",
                     accuracy=.75,suffix_reoptimization_v2_2_2_2_result=dict(pre_acc=.5,post_acc=.75))

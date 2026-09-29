@@ -1,0 +1,20 @@
+{
+  "suffix_reoptimization_v2_2_2_2": false,
+  "suffix_reoptimization_v2_2_2_2_log": true,
+  "suffix_v2_2_2_2_max_attempts": 2,
+  "suffix_v2_2_2_2_max_attempts_per_position": 1,
+  "suffix_v2_2_2_2_steps": 50,
+  "suffix_v2_2_2_2_lr": 0.03,
+  "suffix_v2_2_2_2_trigger_mode": "always",
+  "suffix_v2_2_2_2_trigger_threshold": 0.0,
+  "suffix_v2_2_2_2_hidden_weight_mode": "front_decay",
+  "suffix_v2_2_2_2_hidden_weight_decay": 0.9,
+  "suffix_v2_2_2_2_hidden_weight_floor": 0.2,
+  "suffix_v2_2_2_2_prox_weight": 0.005,
+  "suffix_v2_2_2_2_range_weight": 0.001,
+  "suffix_v2_2_2_2_range_top_k": 10,
+  "suffix_v2_2_2_2_accept_mode": "hidden_loss",
+  "suffix_v2_2_2_2_filter_nonascii": true,
+  "suffix_v2_2_2_2_checkpoint_enabled": false,
+  "suffix_v2_2_2_2_expansion_policy": "checkpoint_sources_2_plus_4"
+}

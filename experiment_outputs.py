@@ -10,6 +10,51 @@ import warnings
 PROGRESS_ACTIVE = False
 
 
+def discretization_offline_evaluation(result, reference_ids, eval_start_pos):
+    """Label-dependent diagnostics, called only after the online method returns."""
+    import hashlib
+    import math
+    reference = [int(value) for value in reference_ids]
+    pre, final = result["pre_tokens"], result["final_tokens"]
+    if len(pre) != len(reference) or len(final) != len(reference):
+        raise ValueError("offline discretization token alignment mismatch")
+    if not 0 <= eval_start_pos <= len(reference):
+        raise ValueError("invalid offline evaluation start")
+    def coverage(table, phase, retained):
+        position = table["position"]
+        expected = reference[position]
+        ids = table.get("candidate_token_ids", [])
+        scores = table.get("candidate_hidden_cosine", [])
+        return dict(position=position, phase=phase, retained_in_formal_state=retained,
+                    pool_contains_gt=expected in ids,
+                    gt_validly_scored=any(token == expected and score is not None and math.isfinite(score)
+                                          for token, score in zip(ids, scores)),
+                    selected_correct=table.get("selected_token_id") == expected)
+    tables = [coverage(t, "initial", True) for t in result.get("initial_candidate_rerank", [])]
+    for index, event in enumerate(result.get("events", [])):
+        for table in event.get("candidate_rerank", []):
+            tables.append(coverage(table, "R_event_{}".format(index), event.get("accepted", False)))
+    expansions = []
+    for event in result.get("candidate_expansion", {}).get("events", []):
+        expected = reference[event["position"]]
+        original = expected in event["original_candidate_ids"]
+        added = expected in event["added_candidate_ids"]
+        expansions.append(dict(position=event["position"], phase=event["phase"],
+            retained_in_formal_state=event["retained_in_formal_state"], original_contains_gt=original,
+            expanded_contains_gt=original or added, newly_covered=added and not original,
+            selected_correct=event["selected_token_id"] == expected,
+            added_gt_validly_scored=any(token == expected and score is not None and math.isfinite(score)
+                for token, score in zip(event["added_candidate_ids"], event["added_hidden_cosine"]))))
+    before = [a == b for a, b in zip(pre[eval_start_pos:], reference[eval_start_pos:])]
+    after = [a == b for a, b in zip(final[eval_start_pos:], reference[eval_start_pos:])]
+    return dict(evaluated_after_online_return=True, eval_start_pos=eval_start_pos,
+                reference_sha256=hashlib.sha256(json.dumps(reference).encode()).hexdigest(),
+                pre_correctness=before, final_correctness=after,
+                evaluated_token_count=len(after), correct_token_count=sum(after),
+                accuracy=sum(after)/len(after) if after else None,
+                candidate_coverage=tables, expansion_coverage=expansions)
+
+
 def checkpoint_offline_evaluation(result, reference_ids, eval_start_pos):
     """Only call after the entire v2.2.2 online sidecar has returned."""
     reference = [int(value) for value in reference_ids]
@@ -390,6 +435,18 @@ def _resolved_suffix_v221_config(args):
 
 
 
+def _resolved_suffix_v222_2_config(args):
+    defaults = {'enabled': False, 'log_enabled': True, 'max_attempts': 2, 'max_attempts_per_position': 1, 'steps': 50, 'lr': 0.03, 'trigger_mode': 'always', 'trigger_threshold': 0.0, 'hidden_weight_mode': 'front_decay', 'hidden_weight_decay': 0.9, 'hidden_weight_floor': 0.2, 'prox_weight': 0.005, 'range_weight': 0.001, 'range_top_k': 10, 'accept_mode': 'hidden_loss', 'filter_nonascii': True, 'checkpoint_enabled': False, 'expansion_policy': 'checkpoint_sources_2_plus_4'}
+    aliases = {"enabled": "suffix_reoptimization_v2_2_2_2", "log_enabled": "suffix_reoptimization_v2_2_2_2_log"}
+    result = {key: getattr(args, aliases.get(key, "suffix_v2_2_2_2_" + key), value)
+              for key, value in defaults.items()}
+    result.update(version="v2.2.2(2)", method="suffix_reoptimization_v2.2.2(2)",
+                  expansion_stages=["initial", "every_R"], maximum_added_candidates=6,
+                  candidate_score="current_position_hidden_cosine", final_acceptance="hidden_loss",
+                  formal_gt_blind=True, model_contract="Qwen2/Qwen2.5 causal LM", use_cache=False)
+    return result
+
+
 def _resolved_suffix_v222_config(args):
     defaults = {
         "enabled": False,
@@ -532,6 +589,7 @@ def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
             ),
         },
         "advanced_methods": {
+            "suffix_reoptimization_v2_2_2_2": _resolved_suffix_v222_2_config(args),
             "suffix_reoptimization_v2_2_2": _resolved_suffix_v222_config(args),
             "suffix_reoptimization_v2_2_1": _resolved_suffix_v221_config(args),
             "suffix_reoptimization_v2_1_1": _resolved_suffix_v211_config(args),
@@ -1239,6 +1297,7 @@ def _format_accuracy_pair(before, after):
 def _suffix_result(record):
     return (
         record.get("suffix_reoptimization_result")
+        or record.get("suffix_reoptimization_v2_2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_1_result")
         or record.get("suffix_reoptimization_v2_1_1_result")
@@ -1292,6 +1351,8 @@ def suffix_hidden_metric_view(result, stage="after"):
 
 
 def _method_metric_name(method_name):
+    if method_name == "suffix_reoptimization_v2.2.2(2)":
+        return "suffix_v2_2_2_2"
     name = str(method_name or "").replace(".", "_")
     if name.startswith("suffix_reoptimization_"):
         return "suffix_{}".format(name[len("suffix_reoptimization_"):])
@@ -1408,6 +1469,7 @@ def extract_experiment_stage_summary(record):
             "suffix_reoptimization_v2.1",
             "suffix_reoptimization_v2.1.1",
             "suffix_reoptimization_v2.2.2",
+            "suffix_reoptimization_v2.2.2(2)",
             "suffix_reoptimization_v2.2.1",
         ):
             experiment_view = record.get("advanced_method") or {}

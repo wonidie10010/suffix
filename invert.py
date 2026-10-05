@@ -117,6 +117,14 @@ from suffix_optimization_methods.method_versions.suffix_reoptimization_v2_2_1 im
     SuffixReoptimizationV221Config,
     run_suffix_reoptimization_v2_2_1,
 )
+from suffix_optimization_methods.method_versions.suffix_reoptimization_v2_4 import (
+    SuffixReoptimizationV24Config, config_from_mapping as suffix_v24_config_from_mapping,
+    run_two_stage as run_suffix_v24_two_stage,
+)
+from suffix_optimization_methods.method_versions.suffix_reoptimization_v2_3 import (
+    SuffixReoptimizationV23Config, config_from_mapping as suffix_v23_config_from_mapping,
+    run_two_stage as run_suffix_v23_two_stage,
+)
 from suffix_optimization_methods.method_versions.suffix_reoptimization_v2_2_2_2 import (
     SuffixReoptimizationV222_2Config, config_from_mapping as suffix_v222_2_config_from_mapping,
     run_two_stage as run_suffix_v222_2_two_stage,
@@ -164,6 +172,10 @@ def normalize_suffix_version(value):
         return None
     value = str(value).strip().lower()
     aliases = {
+        "2.4": "v2.4", "v2.4": "v2.4", "suffix_v2_4": "v2.4",
+        "suffix_reoptimization_v2_4": "v2.4", "suffix_reoptimization_v2.4": "v2.4",
+        "2.3": "v2.3", "v2.3": "v2.3", "suffix_v2_3": "v2.3",
+        "suffix_reoptimization_v2_3": "v2.3", "suffix_reoptimization_v2.3": "v2.3",
         "2.2.2(2)": "v2.2.2(2)",
         "v2.2.2(2)": "v2.2.2(2)",
         "suffix_v2_2_2_2": "v2.2.2(2)",
@@ -241,7 +253,7 @@ def normalize_suffix_version(value):
         "baseline": "none",
     }
     if value not in aliases:
-        raise ValueError("suffix_version must be one of: v2.2.2(2), v2.2.2, v2.2.1, v2.1.1, v2.1, v2.0, v1.4.1, v1.4, v1.3.1, v1.3, v1.2.3, v1.2.2, v1.2.1, v1.2, v1.1, v1.0, none")
+        raise ValueError("suffix_version must be one of: v2.4, v2.3, v2.2.2(2), v2.2.2, v2.2.1, v2.1.1, v2.1, v2.0, v1.4.1, v1.4, v1.3.1, v1.3, v1.2.3, v1.2.2, v1.2.1, v1.2, v1.1, v1.0, none")
     return aliases[value]
 
 
@@ -314,6 +326,7 @@ def validate_advanced_candidate_combination(
     if (
         selected_advanced_method in (
             "suffix_reoptimization_v2.2.2",
+            "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
             "suffix_reoptimization_v2.2.2(2)",
             "suffix_reoptimization_v2.2.1",
             "suffix_reoptimization_v2.1",
@@ -332,6 +345,7 @@ def validate_advanced_candidate_combination(
 def validate_suffix_v21_model_config(selected_advanced_method, model_config):
     if selected_advanced_method not in (
         "suffix_reoptimization_v2.2.2",
+        "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
         "suffix_reoptimization_v2.2.2(2)",
         "suffix_reoptimization_v2.2.1",
         "suffix_reoptimization_v2.1",
@@ -339,8 +353,10 @@ def validate_suffix_v21_model_config(selected_advanced_method, model_config):
     ):
         return True
     version = (
+        "v2.4" if selected_advanced_method == "suffix_reoptimization_v2.4" else
+        "v2.3" if selected_advanced_method == "suffix_reoptimization_v2.3" else
         "v2.2.2(2)" if selected_advanced_method == "suffix_reoptimization_v2.2.2(2)" else "v2.2.2"
-        if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.2.2(2)")
+        if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3", "suffix_reoptimization_v2.2.2(2)")
         else
         "v2.2.1"
         if selected_advanced_method == "suffix_reoptimization_v2.2.1"
@@ -423,8 +439,16 @@ def select_advanced_method(suffix_version, suffix_reopt_v1_2_1_config, suffix_re
                            suffix_reopt_v2_1_config=None,
                            suffix_reopt_v2_1_1_config=None,
                            suffix_reopt_v2_2_1_config=None,
-                           suffix_reopt_v2_2_2_config=None, suffix_reopt_v2_2_2_2_config=None):
+                           suffix_reopt_v2_2_2_config=None, suffix_reopt_v2_2_2_2_config=None, suffix_reopt_v2_3_config=None, suffix_reopt_v2_4_config=None):
     suffix_version = normalize_suffix_version(suffix_version)
+    if suffix_version == "v2.4":
+        if suffix_reopt_v2_4_config is None or not suffix_reopt_v2_4_config.enabled:
+            raise ValueError("suffix_version is v2.4 but its config is disabled")
+        return "suffix_reoptimization_v2.4"
+    if suffix_version == "v2.3":
+        if suffix_reopt_v2_3_config is None or not suffix_reopt_v2_3_config.enabled:
+            raise ValueError("suffix_version is v2.3 but its config is disabled")
+        return "suffix_reoptimization_v2.3"
     if suffix_version == "v2.2.2(2)":
         if suffix_reopt_v2_2_2_2_config is None or not suffix_reopt_v2_2_2_2_config.enabled:
             raise ValueError("suffix_version is v2.2.2(2) but its config is disabled")
@@ -923,6 +947,8 @@ def formal_method_result_for_record(record):
     """Return the selected canonical suffix result without version branching."""
     return (
         record.get("suffix_reoptimization_result")
+        or record.get("suffix_reoptimization_v2_4_result")
+        or record.get("suffix_reoptimization_v2_3_result")
         or record.get("suffix_reoptimization_v2_2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_1_result")
@@ -973,7 +999,7 @@ def get_hidden_state(
         target_attention_mask=None,
         up_to=True,
         selected_advanced_method=None):
-    if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.2.2(2)"):
+    if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3", "suffix_reoptimization_v2.2.2(2)"):
         if prompt is None:
             raise ValueError("v2.2.2 target acquisition requires a prompt")
         encoded = tokenizer(prompt, padding=False, truncation=False, return_tensors="pt")
@@ -1839,6 +1865,16 @@ def main(args):
         ),
         filter_nonascii=args.suffix_v2_1_1_filter_nonascii,
     )
+    suffix_reopt_v2_4_config = (
+        suffix_v24_config_from_mapping(vars(args))
+        if normalize_suffix_version(args.suffix_version) == "v2.4"
+        else SuffixReoptimizationV24Config()
+    )
+    suffix_reopt_v2_3_config = (
+        suffix_v23_config_from_mapping(vars(args))
+        if normalize_suffix_version(args.suffix_version) == "v2.3"
+        else SuffixReoptimizationV23Config()
+    )
     suffix_reopt_v2_2_2_2_config = (
         suffix_v222_2_config_from_mapping(vars(args))
         if normalize_suffix_version(args.suffix_version) == "v2.2.2(2)"
@@ -1849,7 +1885,7 @@ def main(args):
         if normalize_suffix_version(args.suffix_version) == "v2.2.2"
         else SuffixReoptimizationV222Config()
     )
-    if normalize_suffix_version(args.suffix_version) in ("v2.2.2", "v2.2.2(2)") and args.lora_model_name is not None:
+    if normalize_suffix_version(args.suffix_version) in ("v2.4", "v2.3", "v2.2.2", "v2.2.2(2)") and args.lora_model_name is not None:
         raise ValueError("v2.2.2 does not support cross-adapter target observations")
     suffix_reopt_v2_2_1_config = SuffixReoptimizationV221Config(
         enabled=args.suffix_reoptimization_v2_2_1,
@@ -1885,6 +1921,8 @@ def main(args):
         suffix_reopt_v2_1_config=suffix_reopt_v2_1_config,
         suffix_reopt_v2_1_1_config=suffix_reopt_v2_1_1_config,
         suffix_reopt_v2_2_1_config=suffix_reopt_v2_2_1_config,
+        suffix_reopt_v2_4_config=suffix_reopt_v2_4_config,
+        suffix_reopt_v2_3_config=suffix_reopt_v2_3_config,
         suffix_reopt_v2_2_2_2_config=suffix_reopt_v2_2_2_2_config,
         suffix_reopt_v2_2_2_config=suffix_reopt_v2_2_2_config,
     )
@@ -2177,9 +2215,12 @@ def main(args):
             dump_json(resolved_config_path, resolved_config)
         run_records = []
 
-        if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.2.2(2)"):
+        if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3", "suffix_reoptimization_v2.2.2(2)"):
             import importlib.metadata
-            resolved_config["runtime"]["checkpoint_environment"] = {
+            environment_key = ("discretization_environment"
+                               if selected_advanced_method in ("suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3")
+                               else "checkpoint_environment")
+            resolved_config["runtime"][environment_key] = {
                 "python": sys.version, "torch": torch.__version__,
                 "transformers": importlib.metadata.version("transformers"),
                 "dtype": str(next(model.parameters()).dtype),
@@ -2196,7 +2237,7 @@ def main(args):
         for param in model.parameters():
             param.requires_grad = False
 
-        if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.2.2(2)"):
+        if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3", "suffix_reoptimization_v2.2.2(2)"):
             model.eval()
         embed_layer = get_input_embedding_layer(model)
         model_device = get_model_device(model)
@@ -2371,7 +2412,7 @@ def main(args):
             first_token_id = int(target_input_ids[0, 0].item())
             special_token_ids = set(tokenizer.all_special_ids)
             fixed_prefix = first_token_id in special_token_ids
-            if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.2.2(2)"):
+            if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3", "suffix_reoptimization_v2.2.2(2)"):
                 fixed_prefix = first_token_id == tokenizer.bos_token_id
             eval_start_pos = 1 if fixed_prefix else 0
             prefix_embed = None
@@ -2424,6 +2465,8 @@ def main(args):
 
             '''weighted average loss'''
             weight_mask = init_weight_mask(0, recover_length, method="linear", devices=[model_device])
+            suffix_reopt_v2_4_result = {}
+            suffix_reopt_v2_3_result = {}
             suffix_reopt_v2_2_2_2_result = {}
             suffix_reopt_v2_2_2_result = {}
             use_external_stage1 = (
@@ -2434,6 +2477,7 @@ def main(args):
                     "suffix_v1.2.3",
                     "frozen_original_baseline",
                     "suffix_reoptimization_v2.2.2",
+                    "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                     "suffix_reoptimization_v2.2.2(2)",
                 )
             )
@@ -2767,6 +2811,76 @@ def main(args):
                     "entry_pipeline": "legacy_stage1_then_v2_1_global_causal",
                     "legacy_stage1": stage1_optimization_result,
                 }
+            elif selected_advanced_method == "suffix_reoptimization_v2.4":
+                public_prefix = [tokenizer.bos_token_id] if eval_start_pos else []
+                pair_id = "{}:{}".format(dataset_metadata.get("name"), dataset_metadata.get("sample_index", sample_idx))
+                snapshot_dir = getattr(args, "suffix_v222_snapshot_dir", None)
+                snapshot_path = os.path.join(snapshot_dir, "sample_{:06d}.pt".format(sample_idx)) if snapshot_dir else None
+                snapshot_contract = {
+                    "model": args.base_model_name, "block": args.num_invert_layers,
+                    "shape": list(next_hidden_states_last.shape), "eval_start_pos": eval_start_pos,
+                    "public_prefix": public_prefix, "mask": total_attention_mask.detach().cpu().tolist(),
+                    "lr": args.lr, "epoch": args.epoch, "alpha": args.alpha, "clip": args.clip,
+                    "init_method": args.init_method, "init_param": args.init_param,
+                    "optim_method": args.optim_method, "seed": args.seed,
+                }
+                final_input_embed, suffix_reopt_v2_4_result = run_suffix_v24_two_stage(
+                    stage1_kwargs=dict(
+                        model=model, initial_embedding=new_input_embed_0, prefix_embedding=prefix_embed,
+                        target_hidden_state=next_hidden_states_last, attention_mask=total_attention_mask,
+                        layer_id=args.num_invert_layers, register_layer_hooks=register_layer_hooks,
+                        weight_mask=weight_mask, right_range=right_range, lr=args.lr,
+                        epoch=args.epoch, alpha=args.alpha, clip=args.clip, optim_method=args.optim_method),
+                    stage2_kwargs=dict(
+                        model=model, embed_layer=embed_layer, target_hidden_state=next_hidden_states_last,
+                        attention_mask=total_attention_mask, layer_id=args.num_invert_layers,
+                        register_layer_hooks=register_layer_hooks, tokenizer=tokenizer,
+                        config=suffix_reopt_v2_4_config, fixed_prefix_tokens=public_prefix,
+                        eval_start_pos=eval_start_pos, filter_nonascii=args.filter_nonascii,
+                        add_perplexity=args.perplexity, top_k_ppl=args.top_k_ppl, top_k_cos=args.top_k_cos,
+                        invert_method=args.invert_method, embedding_top_indices=embedding_top_indices,
+                        select_candidate_from_top_indices=select_candidate_from_top_indices,
+                        get_perplexity=get_perplexity,
+                        forward_and_get_last_hidden_state=forward_and_get_last_hidden_state),
+                    snapshot_path=snapshot_path, snapshot_mode=getattr(args, "suffix_v222_snapshot_mode", None),
+                    pair_id=pair_id, snapshot_contract=snapshot_contract)
+                optimization_result = dict(suffix_reopt_v2_4_result["stage1"])
+                optimization_result.update(stage="stage1_then_suffix_v2_4", version="v2.4")
+            elif selected_advanced_method == "suffix_reoptimization_v2.3":
+                public_prefix = [tokenizer.bos_token_id] if eval_start_pos else []
+                pair_id = "{}:{}".format(dataset_metadata.get("name"), dataset_metadata.get("sample_index", sample_idx))
+                snapshot_dir = getattr(args, "suffix_v222_snapshot_dir", None)
+                snapshot_path = os.path.join(snapshot_dir, "sample_{:06d}.pt".format(sample_idx)) if snapshot_dir else None
+                snapshot_contract = {
+                    "model": args.base_model_name, "block": args.num_invert_layers,
+                    "shape": list(next_hidden_states_last.shape), "eval_start_pos": eval_start_pos,
+                    "public_prefix": public_prefix, "mask": total_attention_mask.detach().cpu().tolist(),
+                    "lr": args.lr, "epoch": args.epoch, "alpha": args.alpha, "clip": args.clip,
+                    "init_method": args.init_method, "init_param": args.init_param,
+                    "optim_method": args.optim_method, "seed": args.seed,
+                }
+                final_input_embed, suffix_reopt_v2_3_result = run_suffix_v23_two_stage(
+                    stage1_kwargs=dict(
+                        model=model, initial_embedding=new_input_embed_0, prefix_embedding=prefix_embed,
+                        target_hidden_state=next_hidden_states_last, attention_mask=total_attention_mask,
+                        layer_id=args.num_invert_layers, register_layer_hooks=register_layer_hooks,
+                        weight_mask=weight_mask, right_range=right_range, lr=args.lr,
+                        epoch=args.epoch, alpha=args.alpha, clip=args.clip, optim_method=args.optim_method),
+                    stage2_kwargs=dict(
+                        model=model, embed_layer=embed_layer, target_hidden_state=next_hidden_states_last,
+                        attention_mask=total_attention_mask, layer_id=args.num_invert_layers,
+                        register_layer_hooks=register_layer_hooks, tokenizer=tokenizer,
+                        config=suffix_reopt_v2_3_config, fixed_prefix_tokens=public_prefix,
+                        eval_start_pos=eval_start_pos, filter_nonascii=args.filter_nonascii,
+                        add_perplexity=args.perplexity, top_k_ppl=args.top_k_ppl, top_k_cos=args.top_k_cos,
+                        invert_method=args.invert_method, embedding_top_indices=embedding_top_indices,
+                        select_candidate_from_top_indices=select_candidate_from_top_indices,
+                        get_perplexity=get_perplexity,
+                        forward_and_get_last_hidden_state=forward_and_get_last_hidden_state),
+                    snapshot_path=snapshot_path, snapshot_mode=getattr(args, "suffix_v222_snapshot_mode", None),
+                    pair_id=pair_id, snapshot_contract=snapshot_contract)
+                optimization_result = dict(suffix_reopt_v2_3_result["stage1"])
+                optimization_result.update(stage="stage1_then_suffix_v2_3", version="v2.3")
             elif selected_advanced_method == "suffix_reoptimization_v2.2.2(2)":
                 public_prefix = [tokenizer.bos_token_id] if eval_start_pos else []
                 pair_id = "{}:{}".format(dataset_metadata.get("name"), dataset_metadata.get("sample_index", sample_idx))
@@ -3069,6 +3183,14 @@ def main(args):
                     eval_start_pos,
                 )
                 suffix_reopt_v2_2_1_result["pre_acc"] = pre_advanced_acc
+            if selected_advanced_method == "suffix_reoptimization_v2.4":
+                pre_advanced_acc = _nonfixed_token_accuracy(
+                    total_input_ids, suffix_reopt_v2_4_result["pre_tokens"], eval_start_pos)
+                suffix_reopt_v2_4_result["pre_acc"] = pre_advanced_acc
+            if selected_advanced_method == "suffix_reoptimization_v2.3":
+                pre_advanced_acc = _nonfixed_token_accuracy(
+                    total_input_ids, suffix_reopt_v2_3_result["pre_tokens"], eval_start_pos)
+                suffix_reopt_v2_3_result["pre_acc"] = pre_advanced_acc
             if selected_advanced_method == "suffix_reoptimization_v2.2.2(2)":
                 pre_advanced_acc = _nonfixed_token_accuracy(
                     total_input_ids, suffix_reopt_v2_2_2_2_result["pre_tokens"], eval_start_pos)
@@ -3388,6 +3510,56 @@ def main(args):
                         eval_start_pos,
                     )
                     post_advanced_acc = acc
+            elif selected_advanced_method == "suffix_reoptimization_v2.4":
+                selected_suffix_result = suffix_reopt_v2_4_result
+                advanced_triggered = bool(
+                    selected_suffix_result.get("triggered", False)
+                )
+                advanced_reason = selected_suffix_result.get("reason")
+                post_advanced_acc = selected_suffix_result.get(
+                    "post_acc",
+                    pre_advanced_acc,
+                )
+                acc = selected_suffix_result.get("final_accuracy")
+                ret_tokens = selected_suffix_result.get("final_text")
+                ret_list = selected_suffix_result.get("final_tokens")
+                if acc is None:
+                    acc = _nonfixed_token_accuracy(
+                        total_input_ids,
+                        ret_list,
+                        eval_start_pos,
+                    )
+                    post_advanced_acc = acc
+                    selected_suffix_result["post_acc"] = acc
+                    selected_suffix_result["final_accuracy"] = acc
+                    selected_suffix_result["accuracy_gain"] = (
+                        acc - pre_advanced_acc
+                    )
+            elif selected_advanced_method == "suffix_reoptimization_v2.3":
+                selected_suffix_result = suffix_reopt_v2_3_result
+                advanced_triggered = bool(
+                    selected_suffix_result.get("triggered", False)
+                )
+                advanced_reason = selected_suffix_result.get("reason")
+                post_advanced_acc = selected_suffix_result.get(
+                    "post_acc",
+                    pre_advanced_acc,
+                )
+                acc = selected_suffix_result.get("final_accuracy")
+                ret_tokens = selected_suffix_result.get("final_text")
+                ret_list = selected_suffix_result.get("final_tokens")
+                if acc is None:
+                    acc = _nonfixed_token_accuracy(
+                        total_input_ids,
+                        ret_list,
+                        eval_start_pos,
+                    )
+                    post_advanced_acc = acc
+                    selected_suffix_result["post_acc"] = acc
+                    selected_suffix_result["final_accuracy"] = acc
+                    selected_suffix_result["accuracy_gain"] = (
+                        acc - pre_advanced_acc
+                    )
             elif selected_advanced_method == "suffix_reoptimization_v2.2.2(2)":
                 selected_suffix_result = suffix_reopt_v2_2_2_2_result
                 advanced_triggered = bool(
@@ -3782,6 +3954,7 @@ def main(args):
                 "suffix_reoptimization_v2.1",
                 "suffix_reoptimization_v2.1.1",
                 "suffix_reoptimization_v2.2.2",
+                "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                 "suffix_reoptimization_v2.2.2(2)",
                 "suffix_reoptimization_v2.2.1",
                 "suffix_reoptimization_v2.0",
@@ -4002,6 +4175,8 @@ def main(args):
                 "suffix_reoptimization_v2_0_result": suffix_reopt_v2_0_result,
                 "suffix_reoptimization_v2_1_result": suffix_reopt_v2_1_result,
                 "suffix_reoptimization_v2_1_1_result": suffix_reopt_v2_1_1_result,
+                "suffix_reoptimization_v2_4_result": suffix_reopt_v2_4_result,
+                "suffix_reoptimization_v2_3_result": suffix_reopt_v2_3_result,
                 "suffix_reoptimization_v2_2_2_2_result": suffix_reopt_v2_2_2_2_result,
                 "suffix_reoptimization_v2_2_2_result": suffix_reopt_v2_2_2_result,
                 "suffix_reoptimization_v2_2_1_result": suffix_reopt_v2_2_1_result,
@@ -4032,12 +4207,14 @@ def main(args):
                             "suffix_reoptimization_v2.1",
                             "suffix_reoptimization_v2.1.1",
                             "suffix_reoptimization_v2.2.2",
+                            "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                             "suffix_reoptimization_v2.2.2(2)",
                             "suffix_reoptimization_v2.2.1",
                         )
                         else suffix_reopt_result.get("pre_acc")
                         if selected_advanced_method in (
                             "suffix_reoptimization_v2.2.2",
+                            "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                             "suffix_reoptimization_v2.2.2(2)",
                             "suffix_reoptimization_v2.2.1",
                             "suffix_reoptimization_v2.0",
@@ -4063,6 +4240,7 @@ def main(args):
                             "suffix_reoptimization_v2.1",
                             "suffix_reoptimization_v2.1.1",
                             "suffix_reoptimization_v2.2.2",
+                            "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                             "suffix_reoptimization_v2.2.2(2)",
                             "suffix_reoptimization_v2.2.1",
                             "suffix_reoptimization_v2.0",
@@ -4100,6 +4278,7 @@ def main(args):
                 "suffix_reoptimization_v2.1",
                 "suffix_reoptimization_v2.1.1",
                 "suffix_reoptimization_v2.2.2",
+                "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                 "suffix_reoptimization_v2.2.2(2)",
                 "suffix_reoptimization_v2.2.1",
                 "suffix_reoptimization_v2.0",
@@ -4121,6 +4300,7 @@ def main(args):
                     "suffix_reoptimization_v2.1",
                     "suffix_reoptimization_v2.1.1",
                     "suffix_reoptimization_v2.2.2",
+                    "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3",
                     "suffix_reoptimization_v2.2.2(2)",
                     "suffix_reoptimization_v2.2.1",
                     "suffix_reoptimization_v2.0",
@@ -4162,8 +4342,26 @@ def main(args):
                 record["run_kind"] = getattr(args, "suffix_v222_run_kind", "standalone")
             else:
                 record.pop("suffix_reoptimization_v2_2_2_2_result", None)
-            if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.2.2(2)"):
-                paired_result = (suffix_reopt_v2_2_2_2_result if selected_advanced_method.endswith("(2)")
+            if selected_advanced_method == "suffix_reoptimization_v2.4":
+                for old_key in ("suffix_reoptimization_v2_2_1_result", "suffix_reoptimization_v2_1_1_result",
+                                "suffix_reoptimization_v2_1_result", "suffix_reoptimization_v2_0_result"):
+                    record.pop(old_key, None)
+                record["pair_id"] = suffix_reopt_v2_4_result["pair_id"]
+                record["run_kind"] = getattr(args, "suffix_v222_run_kind", "standalone")
+            else:
+                record.pop("suffix_reoptimization_v2_4_result", None)
+            if selected_advanced_method == "suffix_reoptimization_v2.3":
+                for old_key in ("suffix_reoptimization_v2_2_1_result", "suffix_reoptimization_v2_1_1_result",
+                                "suffix_reoptimization_v2_1_result", "suffix_reoptimization_v2_0_result"):
+                    record.pop(old_key, None)
+                record["pair_id"] = suffix_reopt_v2_3_result["pair_id"]
+                record["run_kind"] = getattr(args, "suffix_v222_run_kind", "standalone")
+            else:
+                record.pop("suffix_reoptimization_v2_3_result", None)
+            if selected_advanced_method in ("suffix_reoptimization_v2.2.2", "suffix_reoptimization_v2.4", "suffix_reoptimization_v2.3", "suffix_reoptimization_v2.2.2(2)"):
+                paired_result = (suffix_reopt_v2_4_result if selected_advanced_method == "suffix_reoptimization_v2.4"
+                                 else suffix_reopt_v2_3_result if selected_advanced_method == "suffix_reoptimization_v2.3"
+                                 else suffix_reopt_v2_2_2_2_result if selected_advanced_method.endswith("(2)")
                                  else suffix_reopt_v2_2_2_result)
                 record["discretization_offline_evaluation"] = discretization_offline_evaluation(
                     paired_result, total_input_ids[0].detach().cpu().tolist(), eval_start_pos)
@@ -5187,7 +5385,7 @@ if __name__ == "__main__":
     
     # New version fields are explicit config values, not aliases of old-version flags.
     parser.set_defaults(**{key: value for key, value in config.items()
-                           if key.startswith(("suffix_v2_2_2_", "suffix_reoptimization_v2_2_2", "suffix_v222_"))})
+                           if key.startswith(("suffix_v2_4_", "suffix_reoptimization_v2_4", "suffix_v2_3_", "suffix_reoptimization_v2_3", "suffix_v2_2_2_", "suffix_reoptimization_v2_2_2", "suffix_v222_"))})
     args = parser.parse_args()
     canonical_suffix_option_present = any(
         item == "--suffix-version"

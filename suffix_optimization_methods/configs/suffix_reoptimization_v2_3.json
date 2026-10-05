@@ -1,0 +1,36 @@
+{
+  "suffix_reoptimization_v2_3": false,
+  "suffix_reoptimization_v2_3_log": true,
+  "suffix_v2_3_max_attempts": 2,
+  "suffix_v2_3_max_attempts_per_position": 1,
+  "suffix_v2_3_steps": 50,
+  "suffix_v2_3_lr": 0.03,
+  "suffix_v2_3_trigger_mode": "always",
+  "suffix_v2_3_trigger_threshold": 0.0,
+  "suffix_v2_3_hidden_weight_mode": "front_decay",
+  "suffix_v2_3_hidden_weight_decay": 0.9,
+  "suffix_v2_3_hidden_weight_floor": 0.2,
+  "suffix_v2_3_prox_weight": 0.005,
+  "suffix_v2_3_range_weight": 0.001,
+  "suffix_v2_3_range_top_k": 10,
+  "suffix_v2_3_accept_mode": "hidden_loss",
+  "suffix_v2_3_filter_nonascii": true,
+  "suffix_v2_3_trajectory_max_new": 5,
+  "suffix_v2_3_seed_top_k": 5,
+  "suffix_v2_3_case_quota": 3,
+  "suffix_v2_3_space_quota": 3,
+  "suffix_v2_3_prefix_quota": 1,
+  "suffix_v2_3_suffix_quota": 3,
+  "suffix_v2_3_stage1_sampling_steps": [
+    500,
+    600,
+    700,
+    800,
+    900
+  ],
+  "suffix_v2_3_r_sampling_steps": [
+    30,
+    40
+  ],
+  "suffix_v2_3_candidate_batch_size": 35
+}

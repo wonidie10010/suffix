@@ -20,6 +20,10 @@ def discretization_offline_evaluation(result, reference_ids, eval_start_pos):
         raise ValueError("offline discretization token alignment mismatch")
     if not 0 <= eval_start_pos <= len(reference):
         raise ValueError("invalid offline evaluation start")
+    if result.get("version") == "v2.4":
+        return _discretization_v24_offline_evaluation(result, reference, eval_start_pos)
+    if result.get("version") == "v2.3":
+        return _discretization_v23_offline_evaluation(result, reference, eval_start_pos)
     def coverage(table, phase, retained):
         position = table["position"]
         expected = reference[position]
@@ -53,6 +57,96 @@ def discretization_offline_evaluation(result, reference_ids, eval_start_pos):
                 evaluated_token_count=len(after), correct_token_count=sum(after),
                 accuracy=sum(after)/len(after) if after else None,
                 candidate_coverage=tables, expansion_coverage=expansions)
+
+
+def _discretization_v23_offline_evaluation(result, reference, start):
+    """Separate produced, committed, and final-retained decisions after return."""
+    import hashlib
+    import math
+
+    def change(before, after):
+        pairs = list(zip(before[start:], after[start:], reference[start:]))
+        return dict(repairs=sum(a != gt and b == gt for a, b, gt in pairs),
+                    damage=sum(a == gt and b != gt for a, b, gt in pairs),
+                    correct_token_count=sum(b == gt for _, b, gt in pairs))
+
+    coverage = []
+    for event in result.get("discretization", {}).get("events", []):
+        gt = reference[event["position"]]
+        base, variants = event["base_candidates"], event["variant_candidates"]
+        original = gt in event["original_candidate_ids"]
+        trajectory = gt in event["trajectory_candidate_ids"]
+        variant = any(row["token_id"] == gt for row in variants)
+        coverage.append(dict(position=event["position"], phase=event["phase"], call_id=event["call_id"],
+            stage_produced=event["stage_produced"], accepted_into_formal_state=event["accepted_into_formal_state"],
+            retained_in_formal_state=event["retained_in_formal_state"], final_retained=event["final_retained"],
+            rolled_back=event["rolled_back"], original_contains_gt=original, trajectory_contains_gt=trajectory,
+            variant_contains_gt=variant, trajectory_newly_covered=trajectory and not original,
+            variant_newly_covered=variant and not original and not trajectory,
+            pool_contains_gt=original or trajectory or variant,
+            gt_validly_scored=any(row["token_id"] == gt and row["score"] is not None and math.isfinite(row["score"])
+                                 for row in base+variants), selected_correct=event["selected_token_id"] == gt,
+            trajectory_count=len(event["trajectory_candidate_ids"]), variant_count=len(variants)))
+    pre, final = result["pre_tokens"], result["final_tokens"]
+    before = [a == gt for a, gt in zip(pre[start:], reference[start:])]
+    after = [a == gt for a, gt in zip(final[start:], reference[start:])]
+    rounds = [dict(call_id=event["call_id"], accepted=event["accepted"],
+                   rolled_back=event.get("rolled_back", not event["accepted"]),
+                   **change(event["entrance_tokens"], event["trial_tokens"]))
+              for event in result.get("events", []) if "trial_tokens" in event]
+    return dict(evaluated_after_online_return=True, eval_start_pos=start,
+        reference_sha256=hashlib.sha256(json.dumps(reference).encode()).hexdigest(),
+        evaluated_token_count=len(after), correct_token_count=sum(after),
+        accuracy=sum(after)/len(after) if after else None, pre_correctness=before, final_correctness=after,
+        initial_correct_token_count=sum(before), pre_to_final=change(pre, final), r_trials=rounds,
+        candidate_coverage=coverage, final_candidate_coverage=[row for row in coverage if row["final_retained"]])
+
+
+def _discretization_v24_offline_evaluation(result, reference, start):
+    """Attribute speculative, R-accepted and finally retained paths after return."""
+    evaluated = _discretization_v23_offline_evaluation(result, reference, start)
+    for decision, coverage in zip(result.get("discretization", {}).get("events", []), evaluated["candidate_coverage"]):
+        historical = [row for row in decision["base_candidates"] if row.get("quota_source") == "history"]
+        contains = any(row["token_id"] == reference[decision["position"]] for row in historical)
+        coverage.update(history_contains_gt=contains, history_count=len(historical),
+            history_newly_covered=contains and not coverage["pool_contains_gt"],
+            pool_contains_gt=contains or coverage["pool_contains_gt"])
+    events = []
+    for event in result.get("backtracking", {}).get("events", []):
+        left, right = event["window"]
+        baseline = event.get("base_tokens")
+        def changes(path):
+            if baseline is None or path is None:
+                return None
+            return dict(
+                repairs=sum(baseline[p] != reference[p] and path[p] == reference[p] for p in range(left, right+1)),
+                damage=sum(baseline[p] == reference[p] and path[p] != reference[p] for p in range(left, right+1)),
+                wrong_to_wrong=sum(baseline[p] != reference[p] and path[p] != reference[p]
+                                   and baseline[p] != path[p] for p in range(left, right+1)))
+        events.append(dict(event_id=event["event_id"], call_id=event["call_id"],
+            position=event["position"], type=event["type"], launched=event["launched"],
+            accepted=event["accepted"], r_accepted=event["r_accepted"],
+            accepted_into_formal_state=event["accepted_into_formal_state"],
+            final_retained=event["final_retained"], rolled_back=event["rolled_back"],
+            window=list(event["window"]), selected_changes=changes(event.get("selected_tokens")),
+            trial_changes=[dict(trial_index=trial["trial_index"], completed=trial["completed"],
+                accepted=trial["accepted"], reason=trial["reason"], changes=changes(trial.get("tokens")) if trial["completed"] else None)
+                for trial in event["trials"]]))
+    final_tables = {row["position"]: row for row in evaluated["final_candidate_coverage"]}
+    launched_windows = [event["window"] for event in events if event["launched"]]
+    failures = []
+    for position in range(start, len(reference)):
+        if result["final_tokens"][position] == reference[position]:
+            continue
+        table = final_tables.get(position, {})
+        failures.append(dict(position=position,
+            candidate_missing=not table.get("pool_contains_gt", False),
+            scoring_preference=bool(table.get("gt_validly_scored", False)),
+            error_without_search=not any(left <= position <= right for left, right in launched_windows),
+            error_without_trigger=not any(event["position"] == position for event in events),
+            trigger_at_position=any(event["position"] == position for event in events)))
+    evaluated.update(backtracking_events=events, final_error_types=failures)
+    return evaluated
 
 
 def checkpoint_offline_evaluation(result, reference_ids, eval_start_pos):
@@ -435,6 +529,88 @@ def _resolved_suffix_v221_config(args):
 
 
 
+def _resolved_suffix_v24_config(args):
+    config_path = os.path.join(os.path.dirname(__file__), "suffix_optimization_methods", "configs",
+                               "suffix_reoptimization_v2_4.json")
+    with open(config_path, encoding="utf-8") as config_file:
+        configured = json.load(config_file)
+    aliases = {"enabled": "suffix_reoptimization_v2_4", "log_enabled": "suffix_reoptimization_v2_4_log"}
+    reverse_aliases = {value: key for key, value in aliases.items()}
+    result = {reverse_aliases.get(key, key.removeprefix("suffix_v2_4_")): getattr(args, key, value)
+              for key, value in configured.items()}
+    raw_top_k, raw_ppl_k = getattr(args, "top_k_cos", None), getattr(args, "top_k_ppl", None)
+    top_k = max(1, 10 if raw_top_k is None else raw_top_k)
+    ppl_k = max(0, 10 if raw_ppl_k is None else raw_ppl_k) if getattr(args, "perplexity", True) else 0
+    trajectory_k = result.get("trajectory_max_new") or 0
+    seed_k = result.get("seed_top_k") or 0
+    variant_k = sum(min(result.get(name+"_quota") or 0, seed_k) for name in ("case", "space", "prefix", "suffix"))
+    stage1_steps = getattr(args, "epoch", None)
+    stage1_k = sum(step < (1000 if stage1_steps is None else stage1_steps)
+                   for step in (result.get("stage1_sampling_steps") or []))
+    r_k = sum(step < (result.get("steps") or 0) for step in (result.get("r_sampling_steps") or []))
+    result.update(version="v2.4", method="suffix_reoptimization_v2.4", formal_gt_blind=True,
+                  expansion_stages=["initial", "every_R"], trajectory_top_k=1,
+                  sampling_rule="fixed_absolute_completed_step_strictly_before_endpoint",
+                  maximum_initial_candidates=top_k+ppl_k+min(stage1_k, trajectory_k)+variant_k,
+                  maximum_r_candidates=top_k+ppl_k+min(r_k, trajectory_k)+variant_k,
+                  maximum_initial_no_prefix_candidates=top_k+min(stage1_k, trajectory_k)+variant_k,
+                  maximum_r_no_prefix_candidates=top_k+min(r_k, trajectory_k)+variant_k,
+                  original_filter_nonascii=getattr(args, "filter_nonascii", True),
+                  candidate_score="current_position_hidden_cosine_fp32", final_acceptance="hidden_loss",
+                  candidate_deduplication="stable_id_first_occurrence", seed_selection="filter_then_top_k",
+                  candidate_tie_break="base_first_then_generation_order", use_cache=False,
+                  model_contract="Qwen2/Qwen2.5 causal LM")
+    calibration = result.get("backtracking_calibration") or {}
+    for field in ("fit_threshold", "first_fit_threshold", "acceptance_epsilon", "consistency_tolerance"):
+        if calibration and result.get("backtracking_"+field) is None:
+            result["backtracking_"+field] = calibration.get(field)
+    result.update(backtracking_calibration_ready=bool(calibration),
+        backtracking_calibration_status="frozen" if calibration else "pending_independent_calibration",
+        backtracking_budget_status="provisional_requires_independent_prerun",
+        backtracking_window_error="sum_half_clamped_cosine_distance",
+        backtracking_acceptance="first_strict_improvement_at_fixed_endpoint",
+        backtracking_extra_budget_scope="initial_and_all_R_including_rejected_trials",
+        backtracking_history="same_sample_position_model_vocab_prior_winner_ID_only",
+        backtracking_cache_policy="no_speculative_cache",
+        maximum_backtracking_initial_candidates=result["maximum_initial_candidates"]+1,
+        maximum_backtracking_r_candidates=result["maximum_r_candidates"]+1)
+    return result
+
+
+def _resolved_suffix_v23_config(args):
+    config_path = os.path.join(os.path.dirname(__file__), "suffix_optimization_methods", "configs",
+                               "suffix_reoptimization_v2_3.json")
+    with open(config_path, encoding="utf-8") as config_file:
+        configured = json.load(config_file)
+    aliases = {"enabled": "suffix_reoptimization_v2_3", "log_enabled": "suffix_reoptimization_v2_3_log"}
+    reverse_aliases = {value: key for key, value in aliases.items()}
+    result = {reverse_aliases.get(key, key.removeprefix("suffix_v2_3_")): getattr(args, key, value)
+              for key, value in configured.items()}
+    raw_top_k, raw_ppl_k = getattr(args, "top_k_cos", None), getattr(args, "top_k_ppl", None)
+    top_k = max(1, 10 if raw_top_k is None else raw_top_k)
+    ppl_k = max(0, 10 if raw_ppl_k is None else raw_ppl_k) if getattr(args, "perplexity", True) else 0
+    trajectory_k = result.get("trajectory_max_new") or 0
+    seed_k = result.get("seed_top_k") or 0
+    variant_k = sum(min(result.get(name+"_quota") or 0, seed_k) for name in ("case", "space", "prefix", "suffix"))
+    stage1_steps = getattr(args, "epoch", None)
+    stage1_k = sum(step < (1000 if stage1_steps is None else stage1_steps)
+                   for step in (result.get("stage1_sampling_steps") or []))
+    r_k = sum(step < (result.get("steps") or 0) for step in (result.get("r_sampling_steps") or []))
+    result.update(version="v2.3", method="suffix_reoptimization_v2.3", formal_gt_blind=True,
+                  expansion_stages=["initial", "every_R"], trajectory_top_k=1,
+                  sampling_rule="fixed_absolute_completed_step_strictly_before_endpoint",
+                  maximum_initial_candidates=top_k+ppl_k+min(stage1_k, trajectory_k)+variant_k,
+                  maximum_r_candidates=top_k+ppl_k+min(r_k, trajectory_k)+variant_k,
+                  maximum_initial_no_prefix_candidates=top_k+min(stage1_k, trajectory_k)+variant_k,
+                  maximum_r_no_prefix_candidates=top_k+min(r_k, trajectory_k)+variant_k,
+                  original_filter_nonascii=getattr(args, "filter_nonascii", True),
+                  candidate_score="current_position_hidden_cosine_fp32", final_acceptance="hidden_loss",
+                  candidate_deduplication="stable_id_first_occurrence", seed_selection="filter_then_top_k",
+                  candidate_tie_break="base_first_then_generation_order", use_cache=False,
+                  model_contract="Qwen2/Qwen2.5 causal LM")
+    return result
+
+
 def _resolved_suffix_v222_2_config(args):
     defaults = {'enabled': False, 'log_enabled': True, 'max_attempts': 2, 'max_attempts_per_position': 1, 'steps': 50, 'lr': 0.03, 'trigger_mode': 'always', 'trigger_threshold': 0.0, 'hidden_weight_mode': 'front_decay', 'hidden_weight_decay': 0.9, 'hidden_weight_floor': 0.2, 'prox_weight': 0.005, 'range_weight': 0.001, 'range_top_k': 10, 'accept_mode': 'hidden_loss', 'filter_nonascii': True, 'checkpoint_enabled': False, 'expansion_policy': 'checkpoint_sources_2_plus_4'}
     aliases = {"enabled": "suffix_reoptimization_v2_2_2_2", "log_enabled": "suffix_reoptimization_v2_2_2_2_log"}
@@ -589,6 +765,8 @@ def build_resolved_config(args, timestamp, run_dir, experiment_log_path,
             ),
         },
         "advanced_methods": {
+            "suffix_reoptimization_v2_4": _resolved_suffix_v24_config(args),
+            "suffix_reoptimization_v2_3": _resolved_suffix_v23_config(args),
             "suffix_reoptimization_v2_2_2_2": _resolved_suffix_v222_2_config(args),
             "suffix_reoptimization_v2_2_2": _resolved_suffix_v222_config(args),
             "suffix_reoptimization_v2_2_1": _resolved_suffix_v221_config(args),
@@ -1301,6 +1479,8 @@ def _format_accuracy_pair(before, after):
 def _suffix_result(record):
     return (
         record.get("suffix_reoptimization_result")
+        or record.get("suffix_reoptimization_v2_4_result")
+        or record.get("suffix_reoptimization_v2_3_result")
         or record.get("suffix_reoptimization_v2_2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_2_result")
         or record.get("suffix_reoptimization_v2_2_1_result")
@@ -1473,6 +1653,8 @@ def extract_experiment_stage_summary(record):
             "suffix_reoptimization_v2.1",
             "suffix_reoptimization_v2.1.1",
             "suffix_reoptimization_v2.2.2",
+            "suffix_reoptimization_v2.4",
+            "suffix_reoptimization_v2.3",
             "suffix_reoptimization_v2.2.2(2)",
             "suffix_reoptimization_v2.2.1",
         ):

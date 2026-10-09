@@ -1,0 +1,10 @@
+{
+  "include_configs": [
+    "advanced_methods.json",
+    "suffix_reoptimization_v2_5.json"
+  ],
+  "suffix_version": "v2.5",
+  "suffix_reoptimization_v2_5": true,
+  "suffix_reoptimization_v2_4": false,
+  "cgmr_version": "none"
+}

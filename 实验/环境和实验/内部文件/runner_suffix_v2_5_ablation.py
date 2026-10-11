@@ -227,9 +227,10 @@ def compare(groups):
     totals = {}
     for label in ARMS:
         arm = [row["groups"][label] for row in samples]
-        total = {key: sum(r[key] for r in arm) for key in arm[0] if key not in ("accuracy", "pre_hidden_loss", "final_hidden_loss")}
+        total = {key: (math.fsum(r[key] for r in arm) if key.endswith("seconds") else sum(r[key] for r in arm))
+                 for key in arm[0] if key not in ("accuracy", "pre_hidden_loss", "final_hidden_loss")}
         total.update(sample_count=len(samples), token_count=sum(r["token_count"] for r in samples),
-                     macro_accuracy=sum(r["accuracy"] for r in arm) / len(arm))
+                     macro_accuracy=math.fsum(r["accuracy"] for r in arm) / len(arm))
         total["micro_accuracy"] = total["correct"] / total["token_count"]
         totals[label] = total
     adjacent = []
@@ -275,6 +276,8 @@ def verify(bundle, retokenize=False):
             if digest(bundle / directory / ("sample_%06d.pt" % index)) != record[KEY]["stage1_snapshot_sha256"]:
                 raise ValueError("record/shared snapshot SHA256 mismatch")
     comparison = compare(groups)
+    if [r["pair_id"] for r in groups["baseline"]] != [r["pair_id"] for r in read_json(bundle / "sample_manifest.json")["evaluation"]]:
+        raise ValueError("evaluation sample manifest/order mismatch")
     if comparison != read_json(bundle / "comparison.json"):
         raise ValueError("recomputed comparison differs")
     count = 0
@@ -285,8 +288,8 @@ def verify(bundle, retokenize=False):
             for record in records_at(bundle / "runs" / group):
                 ids = tokenizer(str(record["original"]))["input_ids"]
                 start = record["eval_start_pos"]
-                if start:
-                    ids = [tokenizer.bos_token_id] + ids
+                if start != int(bool(ids) and ids[0] == tokenizer.bos_token_id):
+                    raise ValueError("original retokenization BOS/evaluation alignment differs")
                 evaluated = record["discretization_offline_evaluation"]
                 if paired.sha_text(json.dumps(ids)) != evaluated["reference_sha256"]:
                     raise ValueError("original retokenization reference differs")

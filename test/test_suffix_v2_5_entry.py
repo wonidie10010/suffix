@@ -69,8 +69,8 @@ class EntrySmokeTests(unittest.TestCase):
                 TOKENIZERS_PARALLELISM='false', PYTHONDONTWRITEBYTECODE='1',
                 PYTHONUTF8='1', OMP_NUM_THREADS='1', MKL_NUM_THREADS='1',
                 TEMP=str(base / 'temp'), TMP=str(base / 'temp'))
-            for enabled in (False, True):
-                label = 'on' if enabled else 'off'
+            for label, r_enabled, e_enabled, enabled in (
+                    ('off', True, True, False), ('on', True, True, True), ('components_off', False, False, True)):
                 config = dict(include_configs=[str(ROOT / 'experiment_configs/l24_deml3x4_suffix_v2_5.json')],
                     base_model_name=str(model_path), device_map='cpu', num_invert_layers=0, offload_state_dict=False,
                     epoch=3, lr=.001, top_k_cos=3, top_k_ppl=2, alpha=.001,
@@ -78,8 +78,10 @@ class EntrySmokeTests(unittest.TestCase):
                     dataset_path=str(data_path), dataset_type='local', dataset_len=2,
                     log_dir=str(base / label), output_dir='tiny_' + label,
                     suffix_v222_snapshot_dir=str(base / 'snapshots'),
-                    suffix_v222_snapshot_mode='read' if enabled else 'write',
+                    suffix_v222_snapshot_mode='write' if label == 'off' else 'read',
                     suffix_v2_5_steps=3, suffix_v2_5_max_attempts=1, suffix_v2_5_lr=.001,
+                    suffix_v2_5_reoptimization_enabled=r_enabled,
+                    suffix_v2_5_expansion_enabled=e_enabled,
                     suffix_v2_5_backtracking_enabled=enabled,
                     suffix_v2_5_backtracking_calibration=calibration)
                 path = base / (label + '.json')
@@ -93,6 +95,7 @@ class EntrySmokeTests(unittest.TestCase):
                 resolved = json.loads(resolved_files[0].read_text(encoding='utf-8'))
                 self.assertEqual(method.METHOD_NAME, resolved['advanced_method']['name'])
                 settings = resolved['advanced_methods']['suffix_reoptimization_v2_5']
+                self.assertEqual(dict(R=r_enabled, E=e_enabled, B=enabled), settings['component_switches'])
                 self.assertEqual(enabled, settings['backtracking_enabled'])
                 self.assertEqual(640, settings['backtracking_forward_budget'])
                 records = [json.loads(line) for line in (run_dir / 'reconstructions.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
@@ -103,6 +106,13 @@ class EntrySmokeTests(unittest.TestCase):
                 self.assertNotIn('freeze', log)
                 for record in records:
                     result = record['suffix_reoptimization_v2_5_result']
+                    self.assertEqual(dict(R=r_enabled, E=e_enabled, B=enabled), result['component_switches'])
+                    if not r_enabled:
+                        self.assertEqual(0, result['attempt_count'])
+                        self.assertEqual([], result['events'])
+                    if not e_enabled:
+                        self.assertTrue(all(not d['trajectory_candidate_ids'] and not d['variant_candidates']
+                            for d in result['discretization']['events']))
                     self.assertTrue(result['freeze_checks']['passed'])
                     self.assertEqual(0, result['freeze_checks']['optimization_backtracking_events'])
                     self.assertEqual(0, result['freeze_checks']['grad_enabled_forward_calls'])
@@ -110,7 +120,8 @@ class EntrySmokeTests(unittest.TestCase):
                     self.assertTrue(record['discretization_offline_evaluation']['evaluated_after_online_return'])
                     self.assertEqual(len(result['final_tokens']) - result['eval_start_pos'],
                                      len(record['discretization_offline_evaluation']['final_candidate_coverage']))
-                pairs.append(records)
+                if r_enabled and e_enabled:
+                    pairs.append(records)
             self.assertGreater(sum(r['suffix_reoptimization_v2_5_result']['backtracking']['event_count'] for r in pairs[1]), 0)
             for off, on in zip(*pairs):
                 a, b = off['suffix_reoptimization_v2_5_result'], on['suffix_reoptimization_v2_5_result']

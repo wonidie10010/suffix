@@ -1,0 +1,7 @@
+{
+  "include_configs": ["l24_deml3x4_suffix_v2_5.json"],
+  "suffix_v2_5_reoptimization_enabled": true,
+  "suffix_v2_5_expansion_enabled": true,
+  "suffix_v2_5_backtracking_enabled": true,
+  "output_dir": "l24_deml3x4_suffix_v2_5_ablation_reb"
+}

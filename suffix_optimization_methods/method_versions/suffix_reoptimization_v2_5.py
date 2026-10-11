@@ -28,6 +28,8 @@ EMBEDDING_SEARCH_CHUNK_SIZE = 8192
 class SuffixReoptimizationV25Config:
     enabled: bool = False
     log_enabled: bool = True
+    reoptimization_enabled: bool = True
+    expansion_enabled: bool = True
     max_attempts: int = 2
     max_attempts_per_position: int = 1
     steps: int = 50
@@ -86,7 +88,7 @@ class SuffixReoptimizationV25Config:
             if tuple(value) != expected:
                 raise ValueError("v2.5 uses fixed absolute sampling steps: {}".format(expected))
             setattr(self, name, tuple(value))
-        for name in ("enabled", "log_enabled", "filter_nonascii"):
+        for name in ("enabled", "log_enabled", "reoptimization_enabled", "expansion_enabled", "filter_nonascii"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError("suffix_v2_5_{} must be boolean".format(name))
         for name in (
@@ -589,6 +591,9 @@ def config_from_mapping(values):
     for field in SuffixReoptimizationV25Config.__dataclass_fields__:
         key = prefixes.get(field, "suffix_v2_5_" + field)
         if key not in values:
+            if field in ("reoptimization_enabled", "expansion_enabled"):
+                kwargs[field] = True  # Preserve existing v2.5 configs captured before component switches.
+                continue
             raise ValueError("missing explicit v2.5 configuration: " + key)
         kwargs[field] = values[key]
     return SuffixReoptimizationV25Config(**kwargs)
@@ -729,8 +734,8 @@ def validate_trajectory(trajectory, *, position, start, call_id, prefix, identit
 
 
 def build_discretization_base(top_ids, ppl_ids, tokenizer, vocab_size, filter_nonascii=True,
-                              trajectory=None, max_new=5):
-    """Keep B0 intact; offer only the first ID from each chronological sample."""
+                              trajectory=None, max_new=5, expansion_enabled=True):
+    """Keep B0 intact; inject Stage1 Top1 only, retaining R samples for diagnostics."""
     rows, by_id, exclusions = [], {}, []
     for source, tokens in (("embedding", top_ids), ("ppl", ppl_ids)):
         for rank, token in enumerate(tokens):
@@ -747,13 +752,17 @@ def build_discretization_base(top_ids, ppl_ids, tokenizer, vocab_size, filter_no
         raise DiscretizationContractError("empty original candidate table")
     original_ids = list(by_id)
     count = 0
-    for stage in sorted((trajectory or {}).get("stages", []), key=lambda row: row["step"]):
+    stages = (trajectory or {}).get("stages", []) if expansion_enabled else []
+    for stage in sorted(stages, key=lambda row: row["step"]):
         tokens = stage["token_ids"]
         if not tokens:
             exclusions.append(dict(source="trajectory", step=stage["step"], reason="missing_top1"))
             continue
         token = tokens[0]  # Never backfill from Top2, including legacy Top10 metadata.
         label = dict(source="trajectory", step=stage["step"], call_id=trajectory["call_id"], rank=1)
+        if trajectory["call_id"].startswith("R_"):
+            exclusions.append(dict(token_id=token, reason="r_trajectory_candidates_disabled", **label))
+            continue
         reason = _token_exclusion(token, tokenizer, vocab_size, filter_nonascii)
         if not reason and token in by_id:
             by_id[token]["sources"].append(label)
@@ -769,7 +778,8 @@ def build_discretization_base(top_ids, ppl_ids, tokenizer, vocab_size, filter_no
         count += 1
     return dict(candidates=rows, original_candidate_ids=original_ids,
                 trajectory_candidate_ids=[row["token_id"] for row in rows if row["quota_source"] == "trajectory"],
-                trajectory=trajectory, exclusions=exclusions, trajectory_quota_gap=max_new-count)
+                trajectory=trajectory, exclusions=exclusions,
+                trajectory_quota_gap=max_new-count if expansion_enabled else 0)
 
 
 def _variant_texts(category, text):
@@ -786,6 +796,11 @@ def _variant_texts(category, text):
 
 def build_discretization_variants(base_rows, tokenizer, vocab_size, filter_nonascii, config):
     seeds, excluded, variants, counts = [], [], [], Counter()
+    quotas = {category: getattr(config, category+"_quota") if config.expansion_enabled else 0
+              for category in ("case", "space", "prefix", "suffix")}
+    if not config.expansion_enabled:
+        return dict(seeds=[], candidates=[], exclusions=[], counts={}, quotas=quotas,
+                    quota_gaps=dict(quotas))
     # Python's stable sorting preserves B's first-occurrence order on score ties.
     ranked = sorted(base_rows, key=lambda row: -row["score"] if math.isfinite(row["score"]) else math.inf)
     for rank, row in enumerate(ranked):
@@ -802,7 +817,6 @@ def build_discretization_variants(base_rows, tokenizer, vocab_size, filter_nonas
         elif len(seeds) < config.seed_top_k:
             seeds.append(dict(token_id=token, text=text, score=score, base_rank=rank+1, seed_rank=len(seeds)+1))
     by_id = {row["token_id"]: row for row in base_rows}
-    quotas = {category: getattr(config, category+"_quota") for category in ("case", "space", "prefix", "suffix")}
     for category, quota in quotas.items():
         for seed in seeds:
             if counts[category] >= quota:
@@ -1230,7 +1244,8 @@ def _rerank_positions(input_embed, current_tokens, rerank_start, fixed_prefix_to
                 _, ids = get_perplexity(path[:position], model, layer_id=layer_id, top_k=top_k_ppl)
             ppl_ids = [int(token) for token in ids]
         base = build_discretization_base(initial_top_ids[position], ppl_ids, tokenizer,
-            embed_layer.num_embeddings, config.filter_nonascii, trajectory, config.trajectory_max_new)
+            embed_layer.num_embeddings, config.filter_nonascii, trajectory, config.trajectory_max_new,
+            expansion_enabled=config.expansion_enabled)
         base_rows = base["candidates"]
         def score(rows):
             values = _score_candidates([row["token_id"] for row in rows], path, position,
@@ -1269,6 +1284,7 @@ def _rerank_positions(input_embed, current_tokens, rerank_start, fixed_prefix_to
         selected = path_kind != "trial"
         row = dict(phase=("final" if call_id == "final_discretization" else
                           "initial" if call_id == "stage1" else "R"), call_id=call_id, position=position,
+            expansion_enabled=config.expansion_enabled,
             prefix_fingerprint=prefix_hash, entrance_prefix_fingerprint=prefix_fingerprint(entry_prefix),
             original_candidate_ids=base["original_candidate_ids"], original_top_ids=initial_top_ids[position], ppl_ids=ppl_ids,
             trajectory_candidate_ids=base["trajectory_candidate_ids"], trajectory=trajectory,
@@ -1554,7 +1570,8 @@ def run_suffix_reoptimization_v2_5(model, embed_layer, optimized_embedding, targ
     attempts = accepted_count = rejected_count = triggered_count = budget_exhausted = 0
     r_optimizer_calls = 0
     position_attempts, trajectory_stats = {}, []
-    for position in range(eval_start_pos, embedding.shape[1]):
+    r_positions = range(eval_start_pos, embedding.shape[1]) if config.reoptimization_enabled else ()
+    for position in r_positions:
         with _measure_model_forwards(model, "observation", stats):
             anchored = _build_anchored_base_embedding(embedding, tokens, position, eval_start_pos, prefix, embed_layer)
             pre_loss = _hidden_loss_value(model, anchored, target_hidden_state, attention_mask, position,
@@ -1676,6 +1693,8 @@ def run_suffix_reoptimization_v2_5(model, embed_layer, optimized_embedding, targ
         alternatives=config.backtracking_alternatives, max_trials=config.backtracking_max_trials,
         lookahead=config.backtracking_lookahead, cache_policy="no_speculative_cache", compute=backtracking["compute"])
     result = dict(name=METHOD_NAME, method=METHOD_NAME, version=VERSION, enabled=True, skipped=False,
+        reoptimization_enabled=config.reoptimization_enabled, expansion_enabled=config.expansion_enabled,
+        component_switches=dict(R=config.reoptimization_enabled, E=config.expansion_enabled, B=config.backtracking_enabled),
         formal_gt_blind=True, gt_accessed=False, eval_start_pos=eval_start_pos, fixed_prefix_length=len(prefix),
         accept_mode=config.accept_mode, trigger_mode=config.trigger_mode, steps=config.steps,
         max_attempts=config.max_attempts, max_attempts_per_position=config.max_attempts_per_position,
@@ -1686,7 +1705,10 @@ def run_suffix_reoptimization_v2_5(model, embed_layer, optimized_embedding, targ
         budget_exhausted_count=budget_exhausted, reason="accepted {} suffix trial(s), {} backtracking path(s)".format(
             accepted_count, backtracking_result["formal_accepted_count"]),
         initial_candidate_rerank=initial_tables, events=events, backtracking=backtracking_result, discretization=dict(events=decisions,
+        expansion_enabled=config.expansion_enabled,
         stage1_sampling_steps=list(config.stage1_sampling_steps), r_sampling_steps=list(config.r_sampling_steps),
+        stage1_trajectory_candidates_enabled=config.expansion_enabled and config.trajectory_max_new > 0,
+        r_trajectory_candidates_enabled=False,
         trajectory_max_new=config.trajectory_max_new, seed_top_k=config.seed_top_k), compute_stats=stats,
         anomaly_reasons=[event["reason"] for event in events if event["reason"].startswith("trial_failed:")])
     result.update(phase_order=["stage1", "all_R_with_greedy_anchors", "freeze", "final_discretization"],

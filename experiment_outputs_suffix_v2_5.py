@@ -541,20 +541,28 @@ def _resolved_suffix_v25_config(args):
     raw_top_k, raw_ppl_k = getattr(args, "top_k_cos", None), getattr(args, "top_k_ppl", None)
     top_k = max(1, 10 if raw_top_k is None else raw_top_k)
     ppl_k = max(0, 10 if raw_ppl_k is None else raw_ppl_k) if getattr(args, "perplexity", True) else 0
-    trajectory_k = result.get("trajectory_max_new") or 0
-    seed_k = result.get("seed_top_k") or 0
+    expansion_enabled = result["expansion_enabled"]
+    trajectory_k = (result.get("trajectory_max_new") or 0) if expansion_enabled else 0
+    seed_k = (result.get("seed_top_k") or 0) if expansion_enabled else 0
     variant_k = sum(min(result.get(name+"_quota") or 0, seed_k) for name in ("case", "space", "prefix", "suffix"))
     stage1_steps = getattr(args, "epoch", None)
     stage1_k = sum(step < (1000 if stage1_steps is None else stage1_steps)
                    for step in (result.get("stage1_sampling_steps") or []))
-    r_k = sum(step < (result.get("steps") or 0) for step in (result.get("r_sampling_steps") or []))
+    expansion_stages = ["optimization_initial"]
+    if result["reoptimization_enabled"] and result["max_attempts"] > 0:
+        expansion_stages.append("every_R_greedy_anchor")
+    expansion_stages.append("final_discretization")
     result.update(version="v2.5", method="suffix_reoptimization_v2.5", formal_gt_blind=True,
-                  expansion_stages=["optimization_initial", "every_R_greedy_anchor", "final_discretization"], trajectory_top_k=1,
+                  component_switches=dict(R=result["reoptimization_enabled"], E=expansion_enabled, B=result["backtracking_enabled"]),
+                  effective_max_attempts=result["max_attempts"] if result["reoptimization_enabled"] else 0,
+                  expansion_stages=expansion_stages if expansion_enabled else [], trajectory_top_k=1,
+                  stage1_trajectory_candidates_enabled=expansion_enabled and trajectory_k > 0,
+                  r_trajectory_candidates_enabled=False,
                   sampling_rule="fixed_absolute_completed_step_strictly_before_endpoint",
                   maximum_initial_candidates=top_k+ppl_k+min(stage1_k, trajectory_k)+variant_k,
-                  maximum_r_candidates=top_k+ppl_k+min(r_k, trajectory_k)+variant_k,
+                  maximum_r_candidates=top_k+ppl_k+variant_k,
                   maximum_initial_no_prefix_candidates=top_k+min(stage1_k, trajectory_k)+variant_k,
-                  maximum_r_no_prefix_candidates=top_k+min(r_k, trajectory_k)+variant_k,
+                  maximum_r_no_prefix_candidates=top_k+variant_k,
                   original_filter_nonascii=getattr(args, "filter_nonascii", True),
                   candidate_score="current_position_hidden_cosine_fp32", final_acceptance="hidden_loss",
                   candidate_deduplication="stable_id_first_occurrence", seed_selection="filter_then_top_k",
@@ -571,7 +579,8 @@ def _resolved_suffix_v25_config(args):
         backtracking_acceptance="minimum_complete_window_error_then_strict_improvement",
         backtracking_extra_budget_scope="final_discretization_only_fresh_per_sample",
         backtracking_trigger="low_fit_required_small_gap_diagnostic_only",
-        backtracking_history="accepted_optimization_trajectory_ID_proposals_rescored_at_current_prefix",
+        backtracking_history=("stage1_trajectory_ID_proposals_rescored_at_current_prefix" if expansion_enabled
+                              else "original_candidates_only_no_expansion"),
         backtracking_alternative_selection="current_valid_ranking_top4_distinct_nonselected_IDs",
         phase_order=["stage1", "all_R_with_greedy_anchors", "freeze", "final_discretization"],
         backtracking_cache_policy="no_speculative_cache",

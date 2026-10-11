@@ -1,6 +1,8 @@
 {
   "suffix_reoptimization_v2_5": false,
   "suffix_reoptimization_v2_5_log": true,
+  "suffix_v2_5_reoptimization_enabled": true,
+  "suffix_v2_5_expansion_enabled": true,
   "suffix_v2_5_max_attempts": 2,
   "suffix_v2_5_max_attempts_per_position": 1,
   "suffix_v2_5_steps": 50,

@@ -27,7 +27,8 @@ torch.set_num_threads(1)
 
 
 def path_fixture(scorer=immediate, **options):
-    v25_keys = {k: options.pop(k) for k in list(options) if k.startswith('backtracking_')}
+    v25_keys = {k: options.pop(k) for k in list(options)
+                if k.startswith('backtracking_') or k in ('reoptimization_enabled', 'expansion_enabled')}
     kwargs, prefixes = old_path_fixture(scorer, **options)
     fields = vars(kwargs['config']).copy()
     for key in ('max_distance', 'alternatives', 'max_trials', 'forward_budget'):
@@ -55,6 +56,176 @@ def best_later(tokens, position, mode):
         gain = {1: .3, 2: .7, 3: .8, 4: .9, 5: .99}[tokens[1]]
         return gain if tokens[-1] == 1 else .05
     return .99 if tokens[-1] == 1 else .05
+
+
+class TrajectoryCandidateTests(unittest.TestCase):
+    def test_stage1_still_adds_top1_candidates(self):
+        kwargs, _ = path_fixture()
+        trajectory = dict(call_id='stage1', stages=[dict(step=500, token_ids=[7]),
+                                                   dict(step=600, token_ids=[2])])
+        base = v25.build_discretization_base([1, 2], [3], kwargs['tokenizer'],
+            kwargs['embed_layer'].num_embeddings, trajectory=trajectory)
+        self.assertEqual([1, 2, 3, 7], [row['token_id'] for row in base['candidates']])
+        self.assertEqual([7], base['trajectory_candidate_ids'])
+        self.assertEqual(['embedding', 'trajectory'],
+                         [s['source'] for s in base['candidates'][1]['sources']])
+
+    def test_r_samples_do_not_add_or_blacklist_base_candidates(self):
+        kwargs, _ = path_fixture()
+        trajectory = dict(call_id='R_1', stages=[dict(step=30, token_ids=[2]),
+                                                dict(step=40, token_ids=[7])])
+        for ppl in ([3], [3, 7]):
+            with self.subTest(ppl=ppl):
+                base = v25.build_discretization_base([1, 2], ppl, kwargs['tokenizer'],
+                    kwargs['embed_layer'].num_embeddings, trajectory=trajectory)
+                self.assertEqual([1, 2]+ppl, [row['token_id'] for row in base['candidates']])
+                self.assertEqual([], base['trajectory_candidate_ids'])
+                self.assertTrue(all(s['source'] != 'trajectory'
+                                    for row in base['candidates'] for s in row['sources']))
+                self.assertEqual(['r_trajectory_candidates_disabled']*2,
+                                 [row['reason'] for row in base['exclusions']])
+
+    def test_r_trial_and_final_search_exclude_r_samples_without_stage1_fallback(self):
+        for accepted in (False, True):
+            with self.subTest(accepted=accepted):
+                kwargs, _ = path_fixture(fit=.8, max_attempts=1, steps=50)
+                identity = v25.trajectory_identity(kwargs['model'], kwargs['embed_layer'], kwargs['tokenizer'])
+                stage1 = v25.DiscretizationTrajectoryCollector(1000, 1, kwargs['embed_layer'],
+                    'cosine', 'stage1', [0], identity, kwargs['config'].stage1_sampling_steps)
+                stage1.snapshots[500] = [[7] for _ in range(5)]
+                kwargs['stage_candidates'] = stage1.finalize(1000, 6)
+                def optimize(*args, **options):
+                    callback = options['trajectory_callback']
+                    with mock.patch.object(v25, 'stage_neighbours', return_value=[[8] for _ in range(5)]):
+                        callback(30, args[1])
+                    with mock.patch.object(v25, 'stage_neighbours', return_value=[[2] for _ in range(5)]):
+                        callback(40, args[1])
+                    return args[1] + .01, 2., 1. if accepted else 3., dict(completed_steps=50)
+                with mock.patch.object(v25, '_optimize_suffix', side_effect=optimize):
+                    _, result = run(kwargs)
+                self.assertEqual(accepted, result['events'][0]['accepted'])
+                self.assertEqual([30, 40], result['events'][0]['anchor']['discretization_trajectory']['retained_steps'])
+                self.assertFalse(result['discretization']['r_trajectory_candidates_enabled'])
+                initial = [d for d in result['discretization']['events'] if d['phase'] == 'initial']
+                trial = [d for d in result['discretization']['events'] if d['phase'] == 'R']
+                final = [d for d in result['discretization']['events'] if d['phase'] == 'final']
+                self.assertTrue(initial and trial and final)
+                self.assertTrue(all(d['trajectory_candidate_ids'] == [7] for d in initial))
+                self.assertTrue(all(not d['trajectory_candidate_ids'] for d in trial))
+                for decision in trial + (final if accepted else []):
+                    self.assertEqual('R_1', decision['trajectory']['call_id'])
+                    self.assertNotIn(7, decision['original_candidate_ids'])
+                    self.assertNotIn(8, [row['token_id'] for row in decision['base_candidates']])
+                    self.assertEqual(['r_trajectory_candidates_disabled']*2,
+                                     [e['reason'] for e in decision['exclusions']])
+                if not accepted:
+                    self.assertTrue(all(d['trajectory_candidate_ids'] == [7] for d in final))
+                self.assertTrue(result['freeze_checks']['passed'])
+
+
+class ComponentSwitchTests(unittest.TestCase):
+    def test_all_eight_combinations_gate_r_expansion_and_final_backtracking(self):
+        for r_enabled in (False, True):
+            for e_enabled in (False, True):
+                for b_enabled in (False, True):
+                    with self.subTest(R=r_enabled, E=e_enabled, B=b_enabled):
+                        kwargs, _ = path_fixture(fit=.8, max_attempts=1, steps=50,
+                            seed_top_k=5, case_quota=3, space_quota=3, prefix_quota=1, suffix_quota=3,
+                            reoptimization_enabled=r_enabled, expansion_enabled=e_enabled,
+                            backtracking_enabled=b_enabled)
+                        identity = v25.trajectory_identity(kwargs['model'], kwargs['embed_layer'], kwargs['tokenizer'])
+                        stage1 = v25.DiscretizationTrajectoryCollector(1000, 1, kwargs['embed_layer'],
+                            'cosine', 'stage1', [0], identity, kwargs['config'].stage1_sampling_steps)
+                        stage1.snapshots[500] = [[7] for _ in range(5)]
+                        kwargs['stage_candidates'] = stage1.finalize(1000, 6)
+                        entrance = kwargs['optimized_embedding'].clone()
+                        def optimize(*args, **options):
+                            with mock.patch.object(v25, 'stage_neighbours', return_value=[[8] for _ in range(5)]):
+                                options['trajectory_callback'](30, args[1])
+                                options['trajectory_callback'](40, args[1])
+                            return args[1] + .01, 2., 1., dict(completed_steps=50)
+                        with mock.patch.object(v25, '_optimize_suffix', side_effect=optimize) as optimizer, \
+                                mock.patch.object(v25, '_position_similarity', wraps=v25._position_similarity) as similarity:
+                            embedding, result = run(kwargs)
+                        self.assertEqual(int(r_enabled), optimizer.call_count)
+                        self.assertEqual(int(r_enabled), result['attempt_count'])
+                        self.assertEqual(dict(R=r_enabled, E=e_enabled, B=b_enabled), result['component_switches'])
+                        self.assertEqual(b_enabled, bool(result['backtracking']['events']))
+                        if not r_enabled:
+                            similarity.assert_not_called()
+                            self.assertEqual([], result['events'])
+                            self.assertTrue(torch.equal(entrance, embedding))
+                        decisions = result['discretization']['events']
+                        self.assertTrue(all(d['expansion_enabled'] == e_enabled for d in decisions))
+                        initial = [d for d in decisions if d['phase'] == 'initial']
+                        if e_enabled:
+                            self.assertTrue(all(d['trajectory_candidate_ids'] == [7] for d in initial))
+                            self.assertTrue(any(d['variant_candidates'] for d in decisions))
+                        else:
+                            for decision in decisions:
+                                self.assertEqual([], decision['trajectory_candidate_ids'])
+                                self.assertEqual([], decision['seeds'])
+                                self.assertEqual([], decision['variant_candidates'])
+                                self.assertEqual(decision['original_candidate_ids'],
+                                    [row['token_id'] for row in decision['base_candidates']])
+                                self.assertTrue(all(s['source'] in ('embedding', 'ppl')
+                                    for row in decision['base_candidates'] for s in row['sources']))
+                        self.assertFalse(result['discretization']['r_trajectory_candidates_enabled'])
+                        self.assertTrue(result['freeze_checks']['passed'])
+                        self.assertEqual(5, kwargs['config'].seed_top_k)
+                        self.assertEqual(5, kwargs['config'].trajectory_max_new)
+
+    def test_e_off_leaves_original_ids_and_skips_variant_generation(self):
+        kwargs, _ = path_fixture(expansion_enabled=False)
+        for call_id in ('stage1', 'R_1'):
+            trajectory = dict(call_id=call_id, stages=[dict(step=30, token_ids=[2]), dict(step=40, token_ids=[7])])
+            base = v25.build_discretization_base([1, 2], [3, 7], kwargs['tokenizer'],
+                kwargs['embed_layer'].num_embeddings, trajectory=trajectory, expansion_enabled=False)
+            self.assertEqual([1, 2, 3, 7], [row['token_id'] for row in base['candidates']])
+            self.assertEqual([], base['trajectory_candidate_ids'])
+            self.assertTrue(all(s['source'] != 'trajectory' for row in base['candidates'] for s in row['sources']))
+        with mock.patch.object(v25, '_variant_texts', side_effect=AssertionError('E is disabled')):
+            variants = v25.build_discretization_variants([], kwargs['tokenizer'],
+                kwargs['embed_layer'].num_embeddings, True, kwargs['config'])
+        self.assertEqual([], variants['candidates'])
+        self.assertEqual([], variants['seeds'])
+
+    def test_config_switches_are_boolean_and_legacy_configs_default_on(self):
+        fn = functions('load_config', 'merge_config', 'canonicalize_config_aliases')
+        values = fn['load_config'](str(ROOT / 'experiment_configs/l24_deml3x4_suffix_v2_5.json'))
+        self.assertTrue(v25.config_from_mapping(values).reoptimization_enabled)
+        self.assertTrue(v25.config_from_mapping(values).expansion_enabled)
+        for name in ('reoptimization_enabled', 'expansion_enabled'):
+            key = 'suffix_v2_5_' + name
+            self.assertFalse(getattr(v25.config_from_mapping(dict(values, **{key: False})), name))
+            for invalid in (0, 1, 'false', None):
+                with self.subTest(name=name, value=invalid), self.assertRaises(TypeError):
+                    v25.config_from_mapping(dict(values, **{key: invalid}))
+            values.pop(key)
+        legacy = v25.config_from_mapping(values)
+        self.assertTrue(legacy.reoptimization_enabled and legacy.expansion_enabled)
+
+    def test_resolved_config_reports_disabled_components_and_effective_pool_bounds(self):
+        fn = functions('load_config', 'merge_config', 'canonicalize_config_aliases')
+        values = fn['load_config'](str(ROOT / 'experiment_configs/l24_deml3x4_suffix_v2_5.json'))
+        values.update(suffix_v2_5_reoptimization_enabled=False, suffix_v2_5_expansion_enabled=False)
+        class Args(types.SimpleNamespace):
+            def __getattr__(self, name):
+                return None
+        args = Args(**values, selected_advanced_method=v25.METHOD_NAME,
+            selected_candidate_reranking_method='none', config='v25.json')
+        resolved = build_resolved_config(args, 'time', 'run', 'experiment.log', 'reconstructions.jsonl', None, 1, 24, 'qwen2')
+        settings = resolved['advanced_methods']['suffix_reoptimization_v2_5']
+        self.assertEqual(dict(R=False, E=False, B=True), settings['component_switches'])
+        self.assertEqual(0, settings['effective_max_attempts'])
+        self.assertEqual([], settings['expansion_stages'])
+        self.assertFalse(settings['stage1_trajectory_candidates_enabled'])
+        self.assertFalse(settings['r_trajectory_candidates_enabled'])
+        self.assertEqual((20, 10), (settings['maximum_initial_candidates'], settings['maximum_initial_no_prefix_candidates']))
+        self.assertEqual((20, 10), (settings['maximum_r_candidates'], settings['maximum_r_no_prefix_candidates']))
+        self.assertEqual(20, settings['maximum_final_candidates'])
+        self.assertEqual(5, settings['seed_top_k'])
+        self.assertEqual(5, settings['trajectory_max_new'])
 
 
 class TriggerAndSearchTests(unittest.TestCase):
@@ -350,6 +521,10 @@ class IntegrationTests(unittest.TestCase):
         settings = resolved['advanced_methods']['suffix_reoptimization_v2_5']
         self.assertEqual(640, settings['backtracking_forward_budget'])
         self.assertEqual('final_discretization_only_fresh_per_sample', settings['backtracking_extra_budget_scope'])
+        self.assertFalse(settings['r_trajectory_candidates_enabled'])
+        self.assertEqual((35, 25), (settings['maximum_initial_candidates'], settings['maximum_initial_no_prefix_candidates']))
+        self.assertEqual((30, 20), (settings['maximum_r_candidates'], settings['maximum_r_no_prefix_candidates']))
+        self.assertEqual(30, settings['maximum_backtracking_r_candidates'])
         kwargs, _ = path_fixture(best_later, fit=.8)
         buffer = io.StringIO()
         _, result = run(dict(kwargs, log_file=buffer))
